@@ -1,0 +1,223 @@
+{# Insight Shield — login.html (redesigned)
+   Drop-in replacement. No Python/route changes required.
+   Requires: _base.html patch (see HANDOFF.md §3) to allow full-width main on login page.
+#}
+{% extends "_base.html" %}
+{# This page renders get_flashed_messages() inline below (visible on load,
+   pre-auth). _base.html's flash-seed->toast pipeline would otherwise
+   re-render the same (cached, not re-popped) messages a second time. #}
+{% set suppress_flash_seed = true %}
+{% block title %}Sign in · Insight Shield{% endblock %}
+
+{% block head_extra %}
+<style>
+  /* Override base layout for full-viewport split-screen */
+  #main { max-width: 100% !important; padding: 0 !important; margin: 0 !important; }
+  body  { background: var(--surface-900) !important; }
+  footer { display: none !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="flex min-h-screen overflow-hidden">
+
+  {# ── LEFT — Brand panel ──────────────────────────── #}
+  <div class="flex flex-col justify-between w-5/12 flex-shrink-0 px-10 py-10"
+       style="background:var(--surface-900);">
+    <div>
+      {# Logo #}
+      <div class="flex items-center gap-3 mb-8">
+        <div class="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+             style="background:var(--brand-500);">
+          {# Heroicon: shield-check #}
+          <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke-width="1.8"
+               stroke="white" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6
+                 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623
+                 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152
+                 c-3.196 0-6.1-1.248-8.25-3.285z"/>
+          </svg>
+        </div>
+        <div>
+          <div class="font-bold text-xl leading-tight text-white">Insight Shield</div>
+          <div class="text-sm leading-tight text-slate-400">Retail SIEM Dashboard</div>
+        </div>
+      </div>
+
+      <p class="text-base leading-relaxed mb-10 text-slate-300">
+        Real-time threat detection for retail branches, powered by Wazuh + AI translation.
+      </p>
+
+      {# Round 5: Device list rendered server-side from KNOWN_DEVICES, then
+         live-updated every 30s by login-status.js polling /api/status.
+         Per-device dots are colored by [data-device-dot] hooks. The
+         common `.dot` class lives in design-tokens.css; status colors
+         come from --status-online/degraded/offline tokens. #}
+      <div class="space-y-3">
+        <div class="text-xs font-semibold uppercase tracking-widest mb-2 text-slate-600">
+          Monitored devices
+        </div>
+        {% for device in known_devices | default(['POS-TERMINAL-01', 'MANAGER-PC-01']) %}
+        <div class="flex items-center gap-3" data-device-row="{{ device }}">
+          <span class="dot dot--sm"
+                data-device-dot
+                style="background-color: var(--status-online);"
+                aria-hidden="true"></span>
+          <span class="text-sm font-mono text-slate-300">{{ device }}</span>
+          <span class="text-xs text-slate-600" data-device-label>monitoring…</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# System status chip — live-updated by login-status.js. data-status-* hooks
+       let the JS swap the dot color, summary text, and visible counts without
+       touching the rest of the markup. #}
+    <div class="rounded-xl px-4 py-3 mt-8 border border-slate-800">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="dot dot--sm"
+              data-status-dot
+              style="background-color: var(--status-online);"
+              aria-hidden="true"></span>
+        <span class="text-sm font-semibold text-white" data-status-summary>
+          All systems operational
+        </span>
+      </div>
+      <div class="text-xs text-slate-500">
+        Wazuh Manager · AI Pipeline · Notifiers
+        <span data-status-counts class="ml-1"></span>
+      </div>
+    </div>
+  </div>
+
+  {# ── RIGHT — Form panel ──────────────────────────── #}
+  <div class="flex-1 flex flex-col justify-center px-14 py-10 bg-white overflow-y-auto">
+    <div class="max-w-sm w-full mx-auto">
+      <h1 class="text-2xl font-bold text-slate-900 mb-1">Sign in</h1>
+      <p class="text-sm text-slate-500 mb-8">Enter your credentials to access the console.</p>
+
+      {# Error message #}
+      {% if error %}
+      <div role="alert" class="mb-5 rounded-lg border px-4 py-3 text-sm flex items-start gap-2"
+           style="border-color:var(--sev-crit-border);background:var(--sev-crit-bg);color:var(--sev-crit-fg);">
+        <svg class="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" fill="none"
+             viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71
+               c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5
+               -3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+        </svg>
+        {{ error }}
+      </div>
+      {% endif %}
+
+      {# Flash messages — Round E adds the 'throttle' category which carries
+         a clock icon and amber-warning palette so a 429-blocked operator
+         can immediately distinguish "rate-limited, just wait" from a
+         credential-error or generic warning. #}
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, msg in messages %}
+        <div role="alert" aria-live="polite" class="mb-4 rounded-lg border px-4 py-3 text-sm flex items-start gap-2
+             {% if category == 'error' %}
+               border-red-300 bg-red-50 text-red-800
+             {% elif category == 'throttle' %}
+               border-amber-300 bg-amber-50 text-amber-900
+             {% elif category == 'warning' %}
+               border-amber-300 bg-amber-50 text-amber-800
+             {% else %}
+               border-emerald-300 bg-emerald-50 text-emerald-800
+             {% endif %}">
+          {% if category == 'throttle' %}
+          {# Heroicon: clock — outline. Inline so this template stays
+             self-contained without a macro round-trip for one icon. #}
+          <svg class="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" fill="none"
+               viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          {% endif %}
+          <span>{{ msg }}</span>
+        </div>
+        {% endfor %}
+      {% endwith %}
+
+      <form method="post" action="{{ url_for('auth.login') }}" novalidate class="space-y-5">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        {# Username #}
+        <div>
+          <label for="username" class="block text-sm font-medium text-slate-700 mb-1.5">
+            Username
+          </label>
+          <input id="username" name="username" type="text"
+                 autocomplete="username" required
+                 class="w-full rounded-lg border px-3 py-2.5 text-sm text-slate-900
+                        focus:outline-none transition-colors"
+                 style="border-color:var(--surface-300);">
+        </div>
+
+        {# Password + hold-to-show toggle.
+           UI rework Round C tweak: the eye button now lives INSIDE the input
+           (right-aligned, icon-only) instead of as a labelled link above.
+           Two icon variants stack inside the button — eye-slash visible by
+           default, eye visible while held. The controller in static/ui.js
+           toggles `hidden` on each via [data-eye-closed]/[data-eye-open]
+           hooks. `select-none` prevents the mousedown drag from selecting
+           text, which would otherwise route mouseup to the wrong element. #}
+        {% from "_icon.html" import icon %}
+        <div>
+          <label for="password" class="block text-sm font-medium text-slate-700 mb-1.5">
+            Password
+          </label>
+          <div class="relative">
+            <input id="password" name="password" type="password"
+                   autocomplete="current-password" required
+                   class="w-full rounded-lg border pl-3 pr-10 py-2.5 text-sm text-slate-900
+                          focus:outline-none transition-colors"
+                   style="border-color:var(--surface-300);">
+            <button type="button"
+                    data-hold-password="#password"
+                    aria-pressed="false"
+                    aria-label="Press and hold to reveal password"
+                    title="Press and hold to reveal"
+                    class="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-500 hover:text-slate-700 select-none focus:outline-none">
+              <span data-eye-closed>{{ icon("eye-slash", "w-4 h-4") }}</span>
+              <span data-eye-open hidden>{{ icon("eye", "w-4 h-4") }}</span>
+            </button>
+          </div>
+        </div>
+
+        {# Submit #}
+        <button type="submit"
+                class="w-full flex items-center justify-center gap-2 rounded-lg
+                       py-2.5 text-sm font-semibold text-white transition-colors
+                       focus:outline-none"
+                style="background:var(--brand-500);">
+          Sign in
+          <svg class="w-4 h-4" aria-hidden="true" fill="none"
+               viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/>
+          </svg>
+        </button>
+      </form>
+
+      {# Footer note #}
+      <div class="mt-8 pt-6 border-t text-center" style="border-color:var(--surface-200);">
+        <p class="text-xs text-slate-400">
+          Authorized personnel only · DLSL-IT3A Thesis 2026
+        </p>
+        <p class="text-xs text-slate-300 mt-1">Session expires after 30 min inactivity</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{# Round 5: live agent status via 30s /api/status polling.
+   Loaded only on the login page; the script no-ops if [data-status-dot]
+   is absent so it's safe even if the block accidentally bleeds elsewhere. #}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/login-status.js') }}" defer></script>
+{% endblock %}

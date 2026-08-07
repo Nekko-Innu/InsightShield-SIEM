@@ -1,0 +1,206 @@
+{# Insight Shield — dashboard_manager.html (redesigned)
+   Drop-in replacement. No Python/route changes required.
+   Design: urgent-first layout with action queue + general feed.
+#}
+{% extends "_base.html" %}
+{% block title %}Manager Dashboard · Insight Shield{% endblock %}
+
+{% block content %}
+<h1 class="sr-only">Manager Dashboard</h1>
+
+{# ── Urgent banner — shown only when unacked HIGH/CRIT exist ── #}
+{% set urgent = alerts | selectattr('severity', 'in', ['HIGH', 'CRITICAL'])
+                        | rejectattr('acknowledged_at') | list %}
+{% if urgent %}
+<div class="rounded-xl border-2 px-5 py-4 mb-5 flex items-center justify-between gap-4"
+     style="background:var(--sev-crit-bg);border-color:var(--sev-crit-border);"
+     role="alert">
+  <div class="flex items-center gap-3">
+    <svg class="w-5 h-5 flex-shrink-0" aria-hidden="true"
+         style="color:var(--sev-crit-border);"
+         fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round"
+        d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71
+           c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5
+           -3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+    </svg>
+    <div>
+      <div class="font-semibold text-sm" style="color:var(--sev-crit-fg);">
+        {{ urgent | length }} urgent alert{{ 's' if urgent | length != 1 }} — IT has been notified
+      </div>
+      <div class="text-xs text-slate-500 mt-0.5">
+        The IT team handles acknowledgment and resolution. Scroll to the feed below for context.
+      </div>
+    </div>
+  </div>
+  <a href="#feed-title"
+     class="flex items-center gap-1.5 text-sm font-semibold px-4 py-2 rounded-lg
+            text-white transition-colors flex-shrink-0"
+     style="background:var(--sev-crit-border);">
+    View feed
+    <svg class="w-4 h-4" aria-hidden="true" fill="none"
+         viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round"
+        d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3"/>
+    </svg>
+  </a>
+</div>
+{% endif %}
+
+{# ── KPI strip ─────────────────────────────────────────────── #}
+{# UI rework Round C: literal hex colors swapped for --status-* tokens so
+   the health gauge tracks the same palette as the login indicator and
+   monitored devices. .health-score-number applies the prototype's
+   2.5rem / weight-800 / tabular-nums treatment from Round A.
+   Round D follow-up: the per-device "Monitored devices" section was
+   replaced by an Active Agents X/Y KPI tile placed next to Branch Health,
+   so the at-a-glance KPI strip carries the same signal in 1/4 the
+   vertical real-estate. Color thresholds match the login-page status:
+   100% online → green; exactly 1 offline → amber; 2+ offline → red. #}
+{% set hs      = health_score | default(100) %}
+{% set hs_color = 'var(--status-online)' if hs >= 80 else 'var(--status-degraded)' if hs >= 50 else 'var(--status-offline)' %}
+{% set agents_total   = agents | length %}
+{% set agents_online  = agents | selectattr('status', 'equalto', 'active') | list | length %}
+{% set agents_offline = agents_total - agents_online %}
+{% set agents_color =
+  'var(--surface-300)'      if agents_total == 0
+  else 'var(--status-online)'    if agents_offline == 0
+  else 'var(--status-degraded)'  if agents_offline == 1
+  else 'var(--status-offline)' %}
+<section class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5"
+         aria-label="Key metrics">
+  <div class="bg-white rounded-xl shadow-card border border-surface-200 p-4 text-center">
+    <div class="text-xs font-medium text-slate-500 mb-1">Branch Health</div>
+    <div class="health-score-number mb-1"
+         style="color: {{ hs_color }};"
+         aria-label="Health score {{ hs }} out of 100">{{ hs }}</div>
+    <div class="text-xs text-slate-400">
+      {{ 'Good' if hs >= 80 else 'Fair' if hs >= 50 else 'Poor' }} · resets midnight PHT
+    </div>
+  </div>
+  <div class="bg-white rounded-xl shadow-card border border-surface-200 p-4 text-center">
+    <div class="text-xs font-medium text-slate-500 mb-1">Active agents</div>
+    {# Round D follow-up: text-2xl font-bold matches the Open/Critical/High
+       tiles so the four ratio/count KPIs share one visual rank. Branch
+       Health stays at .health-score-number (2.5rem) so the headline gauge
+       keeps top hierarchy. #}
+    <div class="text-2xl font-bold tabular-nums"
+         style="color: {{ agents_color }};"
+         aria-label="{{ agents_online }} of {{ agents_total }} agents online">{{ agents_online }}/{{ agents_total }}</div>
+    <div class="text-xs text-slate-400 mt-1">
+      {% if agents_total == 0 %}no agents registered
+      {% elif agents_offline == 0 %}all online
+      {% elif agents_offline == 1 %}1 offline
+      {% else %}{{ agents_offline }} offline{% endif %}
+    </div>
+  </div>
+  <div class="bg-white rounded-xl shadow-card border border-surface-200 p-4 text-center">
+    <div class="text-xs font-medium text-slate-500 mb-1">Open alerts</div>
+    <div class="text-2xl font-bold text-slate-900">{{ summary.open | default(0) }}</div>
+  </div>
+  <div class="bg-white rounded-xl shadow-card border border-surface-200 p-4 text-center">
+    <div class="text-xs font-medium text-slate-500 mb-1">Critical (24h)</div>
+    <div class="text-2xl font-bold" style="color:var(--sev-crit-border);">
+      {{ summary.critical | default(0) }}
+    </div>
+  </div>
+  <div class="bg-white rounded-xl shadow-card border border-surface-200 p-4 text-center">
+    <div class="text-xs font-medium text-slate-500 mb-1">High (24h)</div>
+    <div class="text-2xl font-bold" style="color:var(--sev-high-border);">
+      {{ summary.high | default(0) }}
+    </div>
+  </div>
+</section>
+
+{# ── General alert feed ───────────────────────────────────── #}
+<section aria-labelledby="feed-title">
+  <div class="flex items-center justify-between mb-2">
+    <h2 id="feed-title" class="text-sm font-semibold text-slate-700">All recent alerts</h2>
+    <span class="text-xs text-slate-400 flex items-center gap-1">
+      <svg class="w-3.5 h-3.5" aria-hidden="true" fill="none"
+           viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0
+             l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0
+             0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
+      </svg>
+      Live · every 15 s
+    </span>
+  </div>
+
+  {# The Round-G filter toolbar that stood here is gone. It reused the IT
+     dashboard's control IDs so ui.js's shared handler would fire on this
+     page too; that handler has been deleted, because filtering the 50
+     already-rendered rows in the browser could never reach an alert past
+     row 50. The IT dashboard filters in SQL now (db.search_alerts).
+     dashboard_manager() deliberately stays on get_recent_alerts(50) — it is
+     an at-a-glance surface, not the operational one — so rather than leave
+     four widgets that silently do nothing, they are removed. #}
+
+  {# UI rework Round-C tweak: cap the manager alert feed at .table-scroll's
+     420px ceiling. The header above ("All recent alerts" + 15s heartbeat)
+     stays anchored on screen; only the feed scrolls when there are more
+     alerts than fit in the cap. #}
+  <ul id="alerts-feed"
+      {# This used to introspect url_for's globals to decide whether the
+         endpoint existed, and fell back to "". ui.js reads an empty poll URL
+         as "don't poll", so any surprise in that expression silently stopped
+         the feed refreshing with nothing on screen to say so. The endpoint is
+         registered unconditionally. #}
+      data-poll-url="{{ url_for('api.alerts_latest') }}"
+      data-latest-id="{{ alerts[0].id if alerts else '' }}"
+      class="space-y-2 table-scroll">
+
+    {% for a in alerts %}
+    {% set sev = a.severity | lower %}
+    {% set cls = 'crit' if sev == 'critical' else 'high' if sev == 'high'
+                 else 'med' if sev == 'medium' else 'low' if sev == 'low' else 'info' %}
+    {# The data-severity / data-status / data-search bag that hung off this
+       <li> existed only to feed the browser-side filter, which is gone with
+       its toolbar. Nothing reads them now, so a lowercase duplicate of every
+       field on every row is no longer emitted on this page. #}
+    <li class="bg-white rounded-xl border border-surface-200 px-5 py-3.5 flex items-start justify-between gap-4"
+        style="border-left:4px solid var(--sev-{{ cls }}-border);">
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-1 flex-wrap">
+          <span class="badge badge-{{ cls }}">{{ a.severity }}</span>
+          <span class="font-mono text-xs text-slate-500">{{ a.device_name }}</span>
+          <span class="flex items-center gap-1 text-xs text-slate-400">
+            <svg class="w-3.5 h-3.5" aria-hidden="true" fill="none"
+                 viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <time datetime="{{ a.timestamp }}" data-humanize
+                  title="{{ a.timestamp | forensic_ts }}">{{ a.timestamp }}</time>
+          </span>
+        </div>
+        <p class="text-sm text-slate-700 leading-snug line-clamp-2">{{ a.plain_text | default('—') }}</p>
+      </div>
+      <div class="flex items-center gap-2 flex-shrink-0">
+        {% if a.resolved_at %}
+          <span class="text-xs font-semibold text-purple-700">Resolved</span>
+        {% elif a.acknowledged_at %}
+          <span class="text-xs font-semibold" style="color:var(--sev-low-fg);">IT acknowledged</span>
+        {% endif %}
+        <a href="{{ url_for('alerts.alert_detail', alert_id=a.id) }}"
+           class="text-sm px-3 py-1.5 rounded-lg border border-surface-200 hover:bg-slate-50
+                  transition-colors focus:outline-none">View</a>
+      </div>
+    </li>
+    {% else %}
+    <li class="bg-white rounded-xl border border-dashed border-surface-300 px-6 py-10 text-center text-slate-500">
+      <svg class="w-8 h-8 mx-auto mb-3 text-slate-300" fill="none"
+           viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6
+             11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623
+             5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152
+             c-3.196 0-6.1-1.248-8.25-3.285z"/>
+      </svg>
+      No alerts yet. Devices are being monitored.
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

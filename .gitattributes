@@ -1,0 +1,13 @@
+# Shell scripts are executed by bash on the Ubuntu target but edited on a
+# Windows dev box. Without this, core.autocrlf puts CRLF in them and every one
+# fails with `bad interpreter: /usr/bin/env bash^M`.
+*.sh text eol=lf
+
+# The Wazuh integrator wrapper has no extension but is still a shell script,
+# and its Python sibling is run by Wazuh's embedded interpreter.
+wazuh_rules/custom-insightshield text eol=lf
+*.py text eol=lf
+
+# Read by logrotate on the Ubuntu target. No extension to match on, and a
+# stray CR turns `weekly` into an unknown directive.
+logrotate/insightshield text eol=lf

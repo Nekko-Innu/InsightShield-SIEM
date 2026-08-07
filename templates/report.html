@@ -1,0 +1,714 @@
+{% extends "_base.html" %}
+{% from "_icon.html" import icon %}
+{% block title %}Security Report · Insight Shield{% endblock %}
+
+{% block head_extra %}
+{# Prism.js theme + core + JSON grammar — CDN primary, offline fallback to
+   static/vendor/. See reports/snoopy-brewing-widget.md §5.3.
+   Round G §18 stage G2: switched from the default light theme
+   (`prism.min.css`) to the dark `prism-tomorrow.min.css` theme so the
+   Appendix A near-black navy <pre> background pairs with token colors
+   that read on it (string=#7ec699, keyword=#cc99cd, number=#f08d49).
+   Matches the alert_detail.html switch shipped in Round F. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/prism-tomorrow-1.29.0.min.css') }}">
+<script src="{{ url_for('static', filename='vendor/prism-1.29.0.min.js') }}" defer></script>
+<script src="{{ url_for('static', filename='vendor/prism-json-1.29.0.min.js') }}" defer></script>
+{% endblock %}
+
+{% block content %}
+{# Round G §18 stage G2: the `sections` list driving the TOC lives in
+   templates/_report_print.html (single source of truth). The body
+   below uses literal section IDs that match its entries — drift would
+   show up in G2.3's grep-loop verification gate. #}
+
+{# Round G §18: screen-only orientation chrome. The H1 + meta + Print
+   button row lets operators see "this is the report page" while
+   browsing the app, but on print/PDF the cover page (rendered via
+   _report_print.html below) is the document's actual title. The
+   .no-print wrapper hides the H1 row from print output — the @media
+   print rule in design-tokens.css drops .no-print elements entirely. #}
+<div class="no-print">
+  <div class="flex items-start justify-between gap-4 mb-1">
+    <h1 class="text-2xl font-bold text-slate-900">Insight Shield &mdash; Security Audit Report</h1>
+    <button type="button" onclick="window.print()"
+            aria-label="Print this report"
+            title="Print this report"
+            class="shrink-0 inline-flex items-center justify-center p-2 rounded-md border border-surface-200 hover:bg-surface-50 text-slate-700">
+      {{ icon("printer", "w-5 h-5") }}
+    </button>
+  </div>
+  <p class="text-sm text-slate-500 mb-1">Date Range: {{ date_from }} &rarr; {{ date_to }}</p>
+  <p class="text-sm text-slate-500 mb-4">Generated: {{ generated_at | forensic_ts }}</p>
+</div>
+
+{# Round D: report reads as a formal document by default. The date
+   selector lives in a collapsed <details> disclosure so investigators
+   reviewing the audit don't see a competing form bar. Navigation back
+   to the dashboard is via the global header logo (in _base.html); the
+   Print button is dropped in favour of browser-native Ctrl+P (the
+   @media print rule in design-tokens.css already hides .no-print on output). #}
+<details class="no-print bg-white rounded-xl shadow-card border border-surface-200 mb-6">
+  <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700 hover:bg-surface-50 select-none">
+    Adjust date range
+  </summary>
+  <div class="p-4 border-t border-surface-200">
+    <form method="get" action="{{ url_for('reports.report') }}" class="flex flex-wrap items-end gap-3">
+      <div>
+        <label for="date-from" class="block text-xs font-medium text-slate-600 mb-1">From</label>
+        <input id="date-from" type="date" name="from" value="{{ date_from }}"
+               class="rounded-md border border-surface-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none">
+      </div>
+      <div>
+        <label for="date-to" class="block text-xs font-medium text-slate-600 mb-1">To</label>
+        <input id="date-to" type="date" name="to" value="{{ date_to }}"
+               class="rounded-md border border-surface-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none">
+      </div>
+      {# Round G (§18): hidden flag bakes ?generated=1 into the GET
+         query when this form is submitted. The /report route gates
+         the AI chain + DB queries on this flag — direct URL visits
+         without it land on the empty-state CTA below, so the AI
+         provider chain doesn't burn on every page load. #}
+      <input type="hidden" name="generated" value="1">
+      <button type="submit"
+              class="px-4 py-2 text-sm rounded-md bg-brand-500 text-white hover:bg-brand-600">Generate</button>
+
+      {# Round G stage G4: Download PDF anchor renders only when a
+         report has been generated for this range (?generated=1).
+         Links to /report.pdf with the same query params + an
+         explicit generated=1 so the PDF render hits the warm AI
+         summary cache rather than re-firing the chain. The
+         `download` attribute hints the browser to save-as instead
+         of preview-in-tab. The `from` Python keyword forces the
+         dict-spread invocation since url_for() can't accept it
+         as a direct kwarg. #}
+      {% if generated %}
+      <a href="{{ url_for('reports.report_pdf', **{'from': date_from, 'to': date_to, 'generated': '1'}) }}"
+         download
+         class="px-4 py-2 text-sm rounded-md bg-brand-500 text-white hover:bg-brand-600 inline-flex items-center gap-1.5"
+         title="Download this report as a PDF (cover · TOC · sections · appendix)">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <path d="M7 1.5v8m0 0L4 6.5m3 3l3-3M2 11.5h10"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Download PDF
+      </a>
+      {% endif %}
+    </form>
+  </div>
+</details>
+
+{% if not generated %}
+{# Round G empty-state CTA. Renders on bare /report visits (no
+   ?generated=1). Open the disclosure above, pick a range, click
+   Generate. Once generated=1 is in the URL, the body sections below
+   render and this CTA disappears. #}
+<section class="bg-white rounded-xl shadow-card border border-surface-200 p-12 text-center mb-6">
+  <h2 class="text-lg font-bold text-slate-900 mb-2">Choose a date range to generate the report</h2>
+  <p class="text-sm text-slate-600 max-w-prose mx-auto">
+    Open the &ldquo;Adjust date range&rdquo; toolbar above, pick a From and To date,
+    then click <strong>Generate</strong>. The report &mdash; including the AI executive
+    summary &mdash; builds only after Generate is clicked, so the AI provider chain
+    isn&rsquo;t spent on bookmark hits.
+  </p>
+</section>
+{% else %}
+
+<div class="report-body">
+
+{# Round G §18 stage G2: cover page + TOC partial. Renders for both
+   screen and print. Cover occupies page 1, TOC occupies page 2 in
+   PDF; on screen both show as cards. The partial reads the parent's
+   `sections` list defined at the top of {% block content %}. #}
+{% include "_report_print.html" %}
+
+{# ── Section 1: Executive Summary (id-anchored to TOC) ───────────────
+   Third caller of _ai_chain.run_chain. Cached 1h by hash(date_from,
+   date_to, latest_alert_id_in_range). On AI_CHAIN_EXHAUSTED a static
+   fallback paragraph renders so the section is never empty. #}
+<section id="executive-summary" class="rb-panel mb-6">
+  <header class="rb-h2">
+    <span class="rb-h2__marker">§ 01</span>
+    <h2 class="rb-h2__title">Executive Summary</h2>
+    <span class="rb-h2__rule"></span>
+  </header>
+  {% if exec_summary_text and exec_summary_provider != 'AI_CHAIN_EXHAUSTED' %}
+    <div class="text-sm text-slate-700 leading-relaxed space-y-3">
+      {% for paragraph in exec_summary_text.split('\n\n') if paragraph.strip() %}
+      <p>{{ paragraph.strip() }}</p>
+      {% endfor %}
+    </div>
+    {# Round I follow-up: distinguish cache-hit attribution from fresh
+       AI-generation attribution. The chain returns provider_used="cache"
+       on hits to the in-memory _exec_cache (cache.py 1h TTL). Naively
+       rendering "Generated by cache" reads as if cache itself is an AI
+       provider — misleading. The cache only ever stores AI-validated
+       output, so a cache hit IS still AI-generated content, just
+       memo-served. #}
+    <p class="mt-3 text-xs text-slate-400">
+      {% if exec_summary_provider == 'cache' %}
+        Served from cache (originally AI-generated, 1h TTL).
+      {% else %}
+        Generated by {{ exec_summary_provider }}.
+      {% endif %}
+    </p>
+  {% else %}
+    <p class="text-sm text-slate-700 leading-relaxed">
+      An AI-generated executive summary is not available for this period.
+      The summary providers were unreachable when this report was rendered.
+      Refer to the Summary Metrics and NIST CSF 2.0 &mdash; Detect sections
+      below for the underlying figures, or refresh the page to retry the
+      AI chain.
+    </p>
+  {% endif %}
+  {# Round I: Highlights paragraph — always renders regardless of whether
+     the AI chain returned exhausted-sentinel or normal text. Cites the
+     agent-coverage figure directly from the `agents` context list. #}
+  <p class="rb-body" style="margin-top:10px;">
+    <strong>Highlights.</strong>
+    {{ agents | selectattr('status', 'equalto', 'active') | list | length }} of {{ agents | length }} monitored endpoints reported continuously through the period.
+  </p>
+</section>
+
+{# ── Section 2: Methodology &amp; Scope (Round I) ─────────────────────
+   Sits OUTSIDE the `{% if alerts %}` gate below so the report always
+   explains how the data was collected and what was in scope, even on
+   empty windows. Five blocks: Audit Objectives, Scope, Methodology,
+   Limitations, Framework Alignment (with the CSF chip row that
+   .rb-csf at static/report-bureau.css:281-301 already styles). #}
+<section id="methodology-scope" class="rb-panel mb-6">
+  <header class="rb-h2">
+    <span class="rb-h2__marker">§ 02</span>
+    <h2 class="rb-h2__title">Methodology &amp; Scope</h2>
+    <span class="rb-h2__rule"></span>
+  </header>
+
+  <p class="rb-body">
+    <strong>Audit Objectives.</strong>
+    This report evaluates detection coverage and operational follow-through of the Insight Shield SIEM during the reporting period {{ date_from }} &rarr; {{ date_to }}. It covers every Wazuh-decoded alert that matched one of the 27 custom detection rules deployed in <span class="rb-meta">custom_retail_rules.xml</span>.
+  </p>
+
+  <p class="rb-body" style="margin-top:14px;">
+    <strong>Scope.</strong>
+    {{ agents | selectattr('status', 'equalto', 'active') | list | length }} of {{ agents | length }} monitored endpoints were active during the reporting window; remaining endpoints were offline for planned maintenance or were not yet deployed. Alerts were ingested exclusively through the loopback-restricted webhook at <span class="rb-meta">/wazuh-webhook</span>.
+  </p>
+
+  <p class="rb-body" style="margin-top:14px;">
+    <strong>Methodology.</strong>
+    Each Wazuh alert was decoded, enriched with an AI-generated plain-language translation (Groq &rarr; Gemini &rarr; OpenRouter &rarr; static-template fallback chain), and validated by <span class="rb-meta">validator.py</span> against a structure, word-count, and forbidden-term filter. Valid translations were stored in SQLite (WAL mode) with a PHT timestamp. Severity routing followed the matrix in <span class="rb-meta">alert_router.py</span>, including after-hours escalation (business window 08:00&ndash;21:00 PHT). The daily security posture score was calculated by <span class="rb-meta">health_score.py</span> and reset at midnight PHT.
+  </p>
+
+  <p class="rb-body" style="margin-top:14px;">
+    <strong>Limitations.</strong>
+    This audit is scoped exclusively to the NIST CSF 2.0 &mdash; Detect function; Identify, Protect, Respond, Recover, and Govern are out of scope per the project thesis. The report includes only events that matched at least one custom rule; endpoint-native events that did not trigger a rule are excluded. AI-generated summaries are cached for at most one hour; cold-cache generation may add 2&ndash;4 seconds of latency to the first request. Raw Wazuh JSON payloads in Appendix A preserve the original decoder output for independent verification.
+  </p>
+
+  <p class="rb-body" style="margin-top:14px;">
+    <strong>Framework Alignment.</strong> Aligned with the NIST Cybersecurity Framework 2.0:
+  </p>
+  <div class="rb-csf" style="margin-top:8px;">
+    <span>Identify &mdash; out of scope</span>
+    <span>Protect &mdash; out of scope</span>
+    <span class="is-on">Detect &middot; in scope</span>
+    <span>Respond &mdash; out of scope</span>
+    <span>Recover &mdash; out of scope</span>
+    <span>Govern &mdash; out of scope</span>
+  </div>
+</section>
+
+{% if alerts %}
+
+{# ── Section 2: Summary Metrics (id-anchored to TOC) ──────────────────
+   Bureau treatment: 4-up KPI strip with internal dividers (the highest-
+   level metrics) followed by a 3-up grid for secondary KPIs. Reads
+   tighter than the Round 7 7-card grid and emphasises what matters
+   most at the top of the report. #}
+<section id="summary-metrics" class="mb-6">
+  <header class="rb-h2">
+    <span class="rb-h2__marker">§ 03</span>
+    <h2 class="rb-h2__title">Summary Metrics</h2>
+    <span class="rb-h2__rule"></span>
+  </header>
+
+  {# Primary KPIs — strip with internal dividers. Posture score gets
+     the brand-color treatment via .rb-kpi--brand. #}
+  {% set _ps = posture_score | default(100) %}
+  <section class="rb-strip">
+    <div>
+      <div class="rb-kpi__label">Total alerts</div>
+      <div class="rb-kpi__value">{{ summary.total }}</div>
+    </div>
+    <div>
+      <div class="rb-kpi__label">Acknowledged</div>
+      <div class="rb-kpi__value">{{ summary.ack_count }}</div>
+      {% if summary.total %}
+      <div class="rb-kpi__sub">{{ ((summary.ack_count / summary.total) * 100) | round }}%</div>
+      {% endif %}
+    </div>
+    <div>
+      <div class="rb-kpi__label">Mean response</div>
+      <div class="rb-kpi__value">{{ summary.avg_response }}</div>
+    </div>
+    <div class="rb-kpi--brand">
+      <div class="rb-kpi__label">Posture</div>
+      <div class="rb-kpi__value">{{ _ps }}</div>
+      <div class="rb-kpi__sub">/ 100</div>
+    </div>
+  </section>
+
+  {# Secondary KPIs — 3-up grid. Resolved / Avg FK / AI providers. #}
+  <section class="rb-grid-3" style="margin-top: 14px;">
+    <div class="rb-kpi">
+      <div class="rb-kpi__label">Resolved</div>
+      <div class="rb-kpi__value">{{ summary.resolved_count }}</div>
+    </div>
+    <div class="rb-kpi">
+      <div class="rb-kpi__label">Avg FK grade</div>
+      <div class="rb-kpi__value">{{ summary.avg_fk }}</div>
+    </div>
+    <div class="rb-kpi">
+      <div class="rb-kpi__label">AI providers</div>
+      <div class="rb-kpi__value" style="font-size: 14px; line-height: 1.4;">
+        {% for prov, cnt in summary.providers.items() %}{{ prov }} {{ cnt }}{% if not loop.last %} · {% endif %}{% endfor %}
+      </div>
+    </div>
+  </section>
+
+  {# Top 3 threats — Bureau v2 numbered-list treatment: mono numeral
+     + threat label + brand-coloured count column. Reads as a data
+     list rather than bullet prose. #}
+  <section class="rb-panel" style="margin-top: 14px;">
+    <div class="rb-panel__head">Top 3 threats</div>
+    {% if top_threats %}
+    <ol class="rb-threats">
+      {% for t in top_threats %}
+      <li>
+        <span class="n">{{ "%02d" | format(loop.index) }}</span>
+        <span class="t">{{ t.attack_type }}</span>
+        <span class="c">{{ t.count }}</span>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="rb-meta">No threats recorded in this period.</p>
+    {% endif %}
+  </section>
+</section>{# /summary-metrics #}
+
+{# ── Section 3: NIST CSF 2.0 — Detect (the report's anchor function) ─
+   The thesis scopes Insight Shield as a Detect-only SIEM. This single
+   H2 wraps every "what happened" subsection. The previous Round 7
+   layout had three sibling H2s (Agent Compliance, Incident Breakdown,
+   Vulnerability) which read as four uncoordinated dashboards; under
+   the CSF Detect frame they're two coherent halves: (a) Detection
+   coverage — the sensors and what they saw — and (b) Detection
+   follow-through — what IT did about it. #}
+<section id="detect-csf" class="mb-6">
+  <header class="rb-h2">
+    <span class="rb-h2__marker">§ 04</span>
+    <h2 class="rb-h2__title">NIST CSF 2.0 &mdash; Detect</h2>
+    <span class="rb-h2__rule"></span>
+  </header>
+
+  {# CSF chip row — visual scope statement. The "is-on" Detect chip
+     is filled brand navy; the other five sit muted to show "in
+     scope vs out of scope" at a glance, before the reader's eye
+     reaches the prose explanation below. #}
+  <div class="rb-csf">
+    {% for f in ['Identify', 'Protect', 'Detect', 'Respond', 'Recover', 'Govern'] %}
+    <span class="{{ 'is-on' if f == 'Detect' else '' }}">{{ f }}{% if f == 'Detect' %} · in scope{% endif %}</span>
+    {% endfor %}
+  </div>
+
+  <p class="rb-lede" style="max-width: 65ch;">
+    Detect is the CSF 2.0 function for discovering cybersecurity events.
+    The subsections below cover (a) what was <strong>detected</strong> during the period
+    and (b) the <strong>operational follow-through</strong> after detection. The other
+    five CSF 2.0 functions are out of scope per the project thesis.
+  </p>
+
+  <header class="rb-h3">
+    <span class="rb-h3__num">3.1</span>
+    <span class="rb-h3__title">Detection coverage</span>
+  </header>
+
+  {# Agent sensor coverage — Bureau panel. Coverage here means
+     literal sensor coverage: dead agents create blind spots in
+     Detect, so they belong under this CSF function. #}
+  {% set _online = agents | selectattr('status', 'equalto', 'active') | list | length %}
+  {% set _total = agents | length %}
+  <section class="rb-panel">
+    <div class="rb-panel__head">Agent sensor coverage</div>
+    <p class="rb-body">
+      <strong>{{ _online }} of {{ _total }}</strong> agent{{ 's' if _total != 1 }} reporting active during this period.
+      Detection coverage depends on agents staying online &mdash; offline agents are blind spots.
+    </p>
+    {# Bureau v2 .rb-agents grid — 2-up rows of (dot · hostname ·
+       status). Replaces an earlier .rb-lifecycle reuse that was
+       breaking POS-TERMINAL-01 hostnames mid-character because
+       lifecycle's 8px first column was sized for pip dots, not
+       monospace device names. #}
+    {% if agents %}
+    <div class="rb-agents">
+      {% for ag in agents %}
+      <div class="rb-agent">
+        <span class="dot {{ 'on' if (ag.status or '')|lower == 'active' else 'off' }}"></span>
+        <span class="name">{{ ag.name }}</span>
+        <span class="status">{{ ag.status|default('unknown') }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="rb-meta">No agent data available.</p>
+    {% endif %}
+  </section>
+
+  {# Severity breakdown — Bureau treatment: stacked-proportion bar
+     up top (one glance reads the dominant severity), then per-row
+     breakdown (name · proportional bar · count · %). The data-sev
+     attribute drives all colours from a single source in
+     report-bureau.css. #}
+  {% set sev_total = summary.severity.values() | sum %}
+  <section class="rb-panel">
+    <div class="rb-panel__head">Alerts by severity</div>
+    {% if sev_total %}
+    <div class="rb-sev-bar">
+      {% for sev_name, count in summary.severity.items() %}{% if count %}
+      <span data-sev="{{ sev_name }}" style="width: {{ ((count / sev_total) * 100) }}%;"></span>
+      {% endif %}{% endfor %}
+    </div>
+    {% for sev_name, count in summary.severity.items() %}
+    <div class="rb-sev-row">
+      <span class="rb-sev rb-sev-row__name" data-sev="{{ sev_name }}">{{ sev_name }}</span>
+      <div class="rb-sev-row__bar">
+        <span data-sev="{{ sev_name }}" style="width: {{ ((count / sev_total) * 100) }}%;"></span>
+      </div>
+      <span class="rb-sev-row__count">{{ count }}</span>
+      <span class="rb-sev-row__pct">{{ ((count / sev_total) * 100) | round }}%</span>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="rb-meta">No alerts recorded in this period.</p>
+    {% endif %}
+  </section>
+
+  {# Top attacker IPs — Bureau v2 bar visualization. Each row:
+     mono IP · country code · proportional brand-color bar · count.
+     Bar widths normalize against the highest count so the reader
+     can scan dominant attackers at a glance. #}
+  <section class="rb-panel">
+    <div class="rb-panel__head">Top attacker IPs</div>
+    {% if top_attacker_ips %}
+    {% set ip_max = (top_attacker_ips | map(attribute='count') | max) or 1 %}
+    {% for entry in top_attacker_ips %}
+    <div class="rb-ip-row">
+      <span class="ip">{{ entry.ip }}</span>
+      <span class="country">{{ entry.country|default('—') }}</span>
+      <div class="bar"><span style="width: {{ ((entry.count / ip_max) * 100) }}%;"></span></div>
+      <span class="count">{{ entry.count }}</span>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="rb-meta">No attacker IPs derived for this period.</p>
+    {% endif %}
+  </section>
+
+  {# Authentication detection — Bureau v2 stacked-bar treatment.
+     Big success number + smaller failure number + proportion bar
+     at the bottom + failure-rate-% tagline. Tells the auth story
+     in one read instead of two equal KPI cards. #}
+  {% set _auth_total = (auth_metrics.success|default(0)) + (auth_metrics.failure|default(0)) %}
+  <section class="rb-panel">
+    <div class="rb-panel__head">Authentication detection</div>
+    <div class="rb-auth__success">
+      {{ auth_metrics.success|default(0) }}<small>&nbsp;success</small>
+    </div>
+    <div class="rb-auth__failure">
+      {{ auth_metrics.failure|default(0) }}<small>&nbsp;failure{{ '' if (auth_metrics.failure|default(0)) == 1 else 's' }}</small>
+    </div>
+    {% if _auth_total %}
+    <div class="rb-auth__bar">
+      <span class="ok" style="width: {{ ((auth_metrics.success|default(0)) / _auth_total * 100) }}%;"></span>
+      <span class="fail" style="flex: 1;"></span>
+    </div>
+    <div class="rb-auth__rate">
+      Failure rate {{ "%.2f" | format((auth_metrics.failure|default(0)) / _auth_total * 100) }}%
+    </div>
+    {% else %}
+    <p class="rb-meta" style="margin-top: 12px;">No authentication events recorded in this period.</p>
+    {% endif %}
+  </section>
+
+  {# Vulnerability detection (conditional). Round 7 had this as an outer
+     H2; under the CSF frame it's an H4 inside Detection coverage with
+     the same conditional gate (no Wazuh VA payload → no section). #}
+  {% set _has_va = false %}
+  {% for a in alerts %}
+    {% if a.attack_trail %}
+      {% set _trail = a.attack_trail | from_json if a.attack_trail is string else a.attack_trail %}
+      {% if _trail and _trail.data is defined and _trail.data.vulnerability is defined %}
+        {% set _has_va = true %}
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+  {% if _has_va %}
+  <section class="rb-panel">
+    <div class="rb-panel__head">Vulnerability detection</div>
+    <p class="rb-body">
+      Vulnerability Assessment data captured during this period &mdash;
+      see <a href="#alert-details" style="color: var(--rb-brand);">Alert Details</a>
+      for per-alert payload.
+    </p>
+  </section>
+  {% endif %}
+
+  <header class="rb-h3" style="margin-top: 28px;">
+    <span class="rb-h3__num">3.2</span>
+    <span class="rb-h3__title">Detection follow-through (operational metrics)</span>
+  </header>
+  <section class="rb-panel">
+    <p class="rb-body">
+      Of <strong>{{ summary.total }}</strong> detected alert{{ 's' if summary.total != 1 }},
+      <strong>{{ summary.ack_count }}</strong>
+      {{ 'were' if summary.ack_count != 1 else 'was' }}
+      acknowledged by IT and <strong>{{ summary.resolved_count }}</strong>
+      {{ 'were' if summary.resolved_count != 1 else 'was' }} resolved.
+      Average IT response time was <strong>{{ summary.avg_response }}</strong>.
+      {% set _pending = summary.total - summary.ack_count %}
+      {% if _pending > 0 %}
+        <span style="color: var(--sev-high-border);">{{ _pending }} detection{{ 's' if _pending != 1 }} remained unacknowledged at report time.</span>
+      {% elif summary.total > 0 %}
+        All detections received an acknowledgment.
+      {% endif %}
+    </p>
+    <p class="rb-meta">
+      Per-actor follow-through events (acknowledgment, resolution) are
+      logged in the audit trail at
+      <span style="color: var(--rb-ink);">/admin/settings?tab=audit</span>
+      for chain-of-custody review.
+    </p>
+  </section>
+</section>{# /detect-csf #}
+
+{# ── Section 4: Alert Details (id-anchored to TOC, was H3 inside the
+   removed Incident Breakdown wrapper). Per-alert cards keep their
+   AI Translation / Forensic Detail / Lifecycle blocks; the raw Wazuh
+   JSON expandable that used to live inside each card moves to
+   Appendix A so the body of the report reads as analysis and the
+   reference payloads are at the back. #}
+<section id="alert-details" class="mb-6">
+  <header class="rb-h2">
+    <span class="rb-h2__marker">§ 05</span>
+    <h2 class="rb-h2__title">Alert Details</h2>
+    <span class="rb-h2__rule"></span>
+  </header>
+  <p class="rb-body">
+    Per-alert breakdown for {{ summary.total }} detection{{ 's' if summary.total != 1 }} in this period.
+    Raw Wazuh JSON for each alert is in
+    <a href="#appendix-raw" style="color: var(--rb-brand);">Appendix A</a>.
+  </p>
+
+  {% for a in alerts %}
+  {% set sev = a.severity|lower %}
+  <article class="rb-alert" data-sev="{{ a.severity }}">
+    <div class="rb-alert__head">
+      <span class="rb-pill rb-sev" data-sev="{{ a.severity }}">{{ a.severity }}</span>
+      <span class="rb-meta" style="font-size: 12px; color: var(--rb-ink);">{{ a.device_name }}</span>
+      <span class="rb-meta">·</span>
+      <time datetime="{{ a.timestamp }}" class="rb-meta">{{ a.timestamp | forensic_ts }}</time>
+    </div>
+    <h3 class="rb-alert__title">
+      Alert #{{ a.id }} <small>· Rule {{ a.rule_id }} · {{ a.attack_type }}</small>
+    </h3>
+
+    <div style="margin-top: 12px;">
+      <!-- AI Translation -->
+      <div style="margin-bottom: 14px;">
+        <div class="rb-kpi__label">AI translation</div>
+        <p class="rb-body" style="margin-top: 4px; white-space: pre-line;">{{ a.plain_text|default('—') }}</p>
+        {% if a.fk_grade %}<p class="rb-meta">FK grade: {{ a.fk_grade }} · Provider: {{ a.provider_used|default('—') }}</p>{% endif %}
+      </div>
+
+      <!-- Forensic Detail -->
+      {% if a.attack_trail %}
+      {% set trail = a.attack_trail|from_json if a.attack_trail is string else a.attack_trail %}
+      <div style="margin-bottom: 14px;">
+        <div class="rb-kpi__label">Forensic detail</div>
+        <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm" style="margin-top: 4px;">
+          {% if trail.agent %}
+          <dt class="text-slate-500 font-mono text-xs">Agent</dt>
+          <dd class="text-slate-800">{{ trail.agent.name|default(trail.agent.id|default('—')) }} ({{ trail.agent.ip|default('—') }})</dd>
+          {% endif %}
+
+          {% set src_ip = trail.data.get('source_ip', '') if trail.data is defined and trail.data is mapping else '' %}
+          {% if not src_ip %}{% set src_ip = trail.data.get('arp.sender_ip', '') if trail.data is defined and trail.data is mapping else '' %}{% endif %}
+          {% if src_ip %}
+          <dt class="text-slate-500 font-mono text-xs">Source IP</dt>
+          <dd class="text-slate-800 font-mono">{{ src_ip }}</dd>
+          {% endif %}
+
+          {% set src_proc = trail.data.get('win.eventdata.sourceImage', '') if trail.data is defined and trail.data is mapping else '' %}
+          {% if src_proc %}
+          <dt class="text-slate-500 font-mono text-xs">Source Process</dt>
+          <dd class="text-slate-800 font-mono text-xs break-all">{{ src_proc }}</dd>
+          {% endif %}
+
+          {% set tgt_proc = trail.data.get('win.eventdata.targetImage', '') if trail.data is defined and trail.data is mapping else '' %}
+          {% if tgt_proc %}
+          <dt class="text-slate-500 font-mono text-xs">Target Process</dt>
+          <dd class="text-slate-800 font-mono text-xs break-all">{{ tgt_proc }}</dd>
+          {% endif %}
+
+          {% if trail.data is defined and trail.data is mapping and trail.data.get('syscheck.path') %}
+          <dt class="text-slate-500 font-mono text-xs">File</dt>
+          <dd class="text-slate-800 font-mono text-xs break-all">{{ trail.data['syscheck.path'] }}</dd>
+          <dt class="text-slate-500 font-mono text-xs">Event</dt>
+          <dd class="text-slate-800">{{ trail.data.get('syscheck.event', '—') }}</dd>
+          {% endif %}
+
+          {% if trail.mitre %}
+          <dt class="text-slate-500 font-mono text-xs">MITRE</dt>
+          <dd class="text-slate-800">{{ trail.mitre.id|default('—') }} &mdash; {{ trail.mitre.technique|default('—') }}</dd>
+          {% endif %}
+
+          {% if trail.rule_level is defined %}
+          <dt class="text-slate-500 font-mono text-xs">Rule Level</dt>
+          <dd class="text-slate-800">{{ trail.rule_level }} &mdash; {{ trail.rule_description|default('') }}</dd>
+          {% endif %}
+
+          {% if trail.location %}
+          <dt class="text-slate-500 font-mono text-xs">Location</dt>
+          <dd class="text-slate-800 font-mono text-xs">{{ trail.location }}</dd>
+          {% endif %}
+        </dl>
+      </div>
+      {% endif %}
+
+      <!-- Lifecycle — Bureau v2 pip-dot timeline -->
+      <div>
+        <div class="rb-kpi__label">Lifecycle</div>
+        <ul class="rb-lifecycle" style="margin-top: 4px;">
+          <li>
+            <span class="pip brand"></span>
+            <strong>Alert arrived</strong>
+            <span class="rb-meta">{{ a.timestamp | forensic_ts }}</span>
+          </li>
+          <li{% if not a.acknowledged_at %} class="is-pending"{% endif %}>
+            <span class="pip {{ 'warn' if a.acknowledged_at else 'muted' }}"></span>
+            <strong>{{ "IT acknowledged" if a.acknowledged_at else "Acknowledgment pending" }}</strong>
+            <span class="rb-meta">
+              {% if a.acknowledged_at %}{{ a.acknowledged_at | forensic_ts }} · {{ a.acknowledged_by|default('—') }}{% if a.response_time_s is not none %} ({{ a.response_time_s }}s){% endif %}
+              {% else %}—{% endif %}
+            </span>
+          </li>
+          <li{% if not a.resolved_at %} class="is-pending"{% endif %}>
+            <span class="pip {{ 'success' if a.resolved_at else 'muted' }}"></span>
+            <strong>{{ "Resolved" if a.resolved_at else "Resolution pending" }}</strong>
+            <span class="rb-meta">
+              {% if a.resolved_at %}{{ a.resolved_at | forensic_ts }} · {{ a.resolved_by|default('—') }}
+              {% else %}—{% endif %}
+            </span>
+          </li>
+          {% if a.resolve_note %}
+          <li class="note">
+            <span class="pip muted"></span>
+            <strong>Note</strong>
+            <span>"{{ a.resolve_note }}"</span>
+          </li>
+          {% endif %}
+        </ul>
+      </div>
+
+      {# Round G §18 stage G2: in-card raw JSON expandable removed from
+         each card. The full payloads now live in Appendix A below so
+         the body reads as analysis and the reference data sits at the
+         back of the document — closer to how a Wazuh PDF audit lays out. #}
+    </div>
+  </article>
+  {% endfor %}
+</section>{# /alert-details #}
+
+{# ── Section 5: Appendix A — Raw Wazuh JSON ──────────────────────────
+   One <details> per alert. Collapsed by default so the appendix opens
+   as a 1-line index of "Alert #ID · attack_type · timestamp" and only
+   pays the rendering cost for payloads the reviewer actually expands.
+   Reuses the Round F navy near-black `--surface-raw-json` token + Prism Tomorrow
+   theme + `pre.raw-json` wrap utility — single visual register with
+   the alert-detail Raw JSON tab. #}
+<section id="appendix-raw" class="mb-6">
+  <header class="rb-h2">
+    <span class="rb-h2__marker">§ 06</span>
+    <h2 class="rb-h2__title">Appendix A &mdash; Raw Wazuh JSON</h2>
+    <span class="rb-h2__rule"></span>
+    {# Round G follow-up: Expand all / Collapse all toggle. Lives at
+       the right edge of the section header (after rb-h2__rule's
+       flex:1 spacer pushes it to the end). class="no-print" keeps
+       it out of the printed document — both Ctrl+P and Playwright
+       PDF render the section without the button. JS handler is
+       inline at the bottom of this template. #}
+    <button type="button" id="appendix-expand-all"
+            class="no-print px-3 py-1 text-xs rounded-md border border-surface-300 hover:bg-surface-50 text-slate-700">
+      Expand all
+    </button>
+  </header>
+  <p class="rb-body" style="max-width: 65ch;">
+    Original Wazuh decoder payloads for forensic verification.
+  </p>
+  {% for a in alerts %}
+  {% if a.raw_alert %}
+  <details class="bg-white rounded-xl shadow-card border border-surface-200 mb-3 overflow-hidden">
+    <summary class="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-surface-50 select-none">
+      Alert #{{ a.id }} &middot; {{ a.attack_type }} &middot;
+      <time datetime="{{ a.timestamp }}" class="font-normal text-slate-500">{{ a.timestamp | forensic_ts }}</time>
+    </summary>
+    <pre class="raw-json text-xs bg-[var(--surface-raw-json)] p-4 overflow-auto max-h-96"><code class="language-json">{{ a.raw_alert | pretty_json }}</code></pre>
+  </details>
+  {% endif %}
+  {% endfor %}
+</section>{# /appendix-raw #}
+
+{% else %}
+<section class="bg-white rounded-xl shadow-card border border-surface-200 p-12 text-center">
+  <p class="text-slate-500">No alerts found for the period {{ date_from }} &rarr; {{ date_to }}.</p>
+</section>
+{% endif %}
+
+</div>{# /.report-body #}
+{% endif %}{# /Round G: close {% if generated %} body wrapper #}
+
+{# ── Appendix A · Expand all / Collapse all toggle ─────────────────────
+   Native <details> open attribute toggle for every entry inside
+   #appendix-raw. Defer attr ensures DOMContentLoaded has fired
+   before the button hookup runs. The text flips between 'Expand
+   all' and 'Collapse all' based on whether every entry is open. #}
+<script defer>
+(function () {
+  "use strict";
+  document.addEventListener("DOMContentLoaded", function () {
+    var btn = document.getElementById("appendix-expand-all");
+    if (!btn) return;
+    var entries = document.querySelectorAll("#appendix-raw details");
+    if (!entries.length) {
+      btn.disabled = true;
+      btn.textContent = "No entries";
+      return;
+    }
+    function refreshLabel() {
+      var allOpen = Array.prototype.every.call(entries, function (d) { return d.open; });
+      btn.textContent = allOpen ? "Collapse all" : "Expand all";
+    }
+    btn.addEventListener("click", function () {
+      var allOpen = Array.prototype.every.call(entries, function (d) { return d.open; });
+      Array.prototype.forEach.call(entries, function (d) { d.open = !allOpen; });
+      refreshLabel();
+    });
+    // Refresh label whenever the user toggles a single entry, so the
+    // button doesn't stay 'Expand all' after they manually open most.
+    Array.prototype.forEach.call(entries, function (d) {
+      d.addEventListener("toggle", refreshLabel);
+    });
+    refreshLabel();
+  });
+})();
+</script>
+{% endblock %}

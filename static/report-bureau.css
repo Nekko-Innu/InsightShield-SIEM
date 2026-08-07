@@ -1,0 +1,948 @@
+/* ──────────────────────────────────────────────────────────────────
+   Insight Shield · Security Audit Report
+   Bureau (web body) + Marker (print/PDF cover) treatment
+
+   Conditionally loaded by templates/_base.html for the /report and
+   /report.pdf endpoints only. Layered ON TOP of design-tokens.css —
+   does not replace any of it. Round G's @media print rules in
+   design-tokens.css still fire for .no-print + global chrome
+   hiding; this stylesheet adds the report-specific Bureau body
+   treatment + Marker cover overrides on the PDF path.
+
+   --rb-* tokens are private to this file (the "report-bureau"
+   namespace) so they don't collide with the global --brand-* /
+   --surface-* tokens. --rb-brand re-exports --brand-500 with a
+   #2563eb fallback so the navy stays consistent across both
+   stylesheets.
+
+   See docs/security-audit-report.md §15 for how to extend.
+   ────────────────────────────────────────────────────────────── */
+
+:root {
+  --rb-ink:         #0a1020;
+  --rb-ink-soft:    #2c3445;
+  --rb-mute:        #5b6478;
+  --rb-faint:       #9aa3b5;
+  --rb-rule:        #e1e5ec;
+  --rb-rule-soft:   #eef0f4;
+  --rb-paper:       #f7f8fb;
+  --rb-card:        #ffffff;
+  --rb-card-soft:   #fafbfd;  /* inner card segments — never grey */
+  --rb-brand:       var(--brand-500, #2563eb);
+  --rb-brand-50:    #eff6ff;  /* selected row bg, subtle pill bg */
+
+  /* Status tokens — used by lifecycle pips, agent dots, auth panel,
+     alert status indicators. Single source so the visual register
+     stays consistent across surfaces. */
+  --rb-success:      #10b981;
+  --rb-success-deep: #065f46;
+  --rb-warn:         #9a3412;
+  --rb-danger:       #dc2626;
+
+  --rb-display:     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --rb-mono:        ui-monospace, "SF Mono", "Cascadia Code", "Source Code Pro", Consolas, monospace;
+}
+
+/* Scope every Bureau rule to .report-body so it never bleeds into
+   _base.html or other pages. The wrapper is added in report.html
+   right after the {% else %} of the generated-flag check. */
+.report-body { font-family: var(--rb-display); color: var(--rb-ink); background: var(--rb-paper); }
+
+/* ── Section header (§ NN · Title · rule) ──────────────────────── */
+.rb-h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 32px 0 14px;
+}
+.rb-h2__marker {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--rb-brand);
+  color: var(--rb-brand);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-radius: 3px;
+  font-family: var(--rb-display);
+  white-space: nowrap;
+}
+.rb-h2__title  {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.022em;
+  margin: 0;
+  color: var(--rb-ink);
+}
+.rb-h2__rule {
+  flex: 1;
+  height: 1px;
+  background: var(--rb-rule);
+  margin-left: 8px;
+}
+
+.rb-h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 24px 0 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--rb-rule);
+}
+.rb-h3__num {
+  font-family: var(--rb-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rb-brand);
+}
+.rb-h3__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--rb-ink);
+}
+
+/* ── Card / panel / KPI ────────────────────────────────────────── */
+.rb-panel {
+  background: var(--rb-card);
+  border: 1px solid var(--rb-rule);
+  border-radius: 10px;
+  padding: 18px 22px;
+}
+.rb-panel + .rb-panel { margin-top: 14px; }
+.rb-panel__head {
+  font-family: var(--rb-display);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--rb-ink);
+}
+
+.rb-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.rb-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+
+.rb-kpi {
+  background: var(--rb-card);
+  border: 1px solid var(--rb-rule);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.rb-kpi__label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--rb-mute);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.rb-kpi__value {
+  font-family: var(--rb-display);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  color: var(--rb-ink);
+}
+.rb-kpi__sub {
+  font-size: 11px;
+  color: var(--rb-faint);
+  margin-top: 2px;
+}
+.rb-kpi--brand .rb-kpi__value { color: var(--rb-brand); }
+
+/* Top KPI strip (4-up, divider lines, no card gaps) */
+.rb-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border: 1px solid var(--rb-rule);
+  border-radius: 10px;
+  background: var(--rb-card);
+  overflow: hidden;
+}
+.rb-strip > div {
+  padding: 18px 20px;
+  border-right: 1px solid var(--rb-rule);
+}
+.rb-strip > div:last-child { border-right: 0; }
+
+/* ── Body type ────────────────────────────────────────────────── */
+.rb-lede {
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--rb-ink);
+  margin: 0 0 14px;
+  text-wrap: pretty;
+}
+.rb-body {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--rb-ink-soft);
+  margin: 0 0 12px;
+  text-wrap: pretty;
+}
+.rb-meta {
+  font-family: var(--rb-mono);
+  font-size: 11px;
+  color: var(--rb-faint);
+}
+
+/* ── Severity bar + per-row breakdown ─────────────────────────── */
+.rb-sev-bar {
+  display: flex;
+  height: 12px;
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--rb-rule);
+  margin-bottom: 12px;
+}
+.rb-sev-bar > span { display: block; }
+
+.rb-sev-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 40px 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.rb-sev-row__name {
+  font-family: var(--rb-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.rb-sev-row__bar {
+  height: 6px;
+  background: #f4f6fa;
+  border-radius: 1px;
+  overflow: hidden;
+}
+.rb-sev-row__bar > span {
+  display: block;
+  height: 100%;
+  opacity: 0.85;
+  border-radius: 1px;
+}
+.rb-sev-row__count {
+  font-family: var(--rb-mono);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+}
+.rb-sev-row__pct {
+  font-family: var(--rb-mono);
+  font-size: 10px;
+  color: var(--rb-faint);
+  text-align: right;
+}
+
+/* Severity colors — nuanced palette per Bureau v2 spec.
+   Foreground (text) is the deep variant for readable mute on subtle
+   bg; bar color is the vivid variant for chart visibility. Single
+   data-sev attribute drives both. Foreground values are identical to
+   design-tokens.css's --sev-*-fg, so they reference those tokens
+   directly instead of re-declaring the same hex a third time; the
+   vivid bar/border variant below is a deliberately distinct palette
+   (only coincidentally equal for two of five severities) and is left
+   as its own literal set. */
+.rb-sev[data-sev="CRITICAL"]      { color: var(--sev-crit-fg); }
+.rb-sev[data-sev="HIGH"]          { color: var(--sev-high-fg); }
+.rb-sev[data-sev="MEDIUM"]        { color: var(--sev-med-fg); }
+.rb-sev[data-sev="LOW"]           { color: var(--sev-low-fg); }
+.rb-sev[data-sev="INFORMATIONAL"] { color: var(--sev-info-fg); }
+
+.rb-sev-bar > span[data-sev="CRITICAL"]      { background: #dc2626; }
+.rb-sev-bar > span[data-sev="HIGH"]          { background: #ea580c; }
+.rb-sev-bar > span[data-sev="MEDIUM"]        { background: #d97706; }
+.rb-sev-bar > span[data-sev="LOW"]           { background: #16a34a; }
+.rb-sev-bar > span[data-sev="INFORMATIONAL"] { background: #1e40af; }
+
+.rb-sev-row__bar > span[data-sev="CRITICAL"]      { background: #dc2626; }
+.rb-sev-row__bar > span[data-sev="HIGH"]          { background: #ea580c; }
+.rb-sev-row__bar > span[data-sev="MEDIUM"]        { background: #d97706; }
+.rb-sev-row__bar > span[data-sev="LOW"]           { background: #16a34a; }
+.rb-sev-row__bar > span[data-sev="INFORMATIONAL"] { background: #1e40af; }
+
+/* Severity pill — nuanced fg/bg per spec. Pills get the deep
+   foreground on subtle tint (eg. #991b1b on #fef2f2 for CRITICAL),
+   so they read as muted info-density chips rather than alarm chips. */
+.rb-pill {
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.rb-pill[data-sev="CRITICAL"]      { background: var(--sev-crit-bg); color: var(--sev-crit-fg); }
+.rb-pill[data-sev="HIGH"]          { background: var(--sev-high-bg); color: var(--sev-high-fg); }
+.rb-pill[data-sev="MEDIUM"]        { background: var(--sev-med-bg);  color: var(--sev-med-fg); }
+.rb-pill[data-sev="LOW"]           { background: var(--sev-low-bg);  color: var(--sev-low-fg); }
+.rb-pill[data-sev="INFORMATIONAL"] { background: var(--sev-info-bg); color: var(--sev-info-fg); }
+
+/* ── CSF function chip row (used at top of § 03 Detect) ───────────
+   Six chips, one per CSF function. The "is-on" chip (Detect) is
+   filled brand navy; the others sit muted to communicate "in scope
+   vs out of scope at a glance" without needing the prose paragraph
+   below to do all the work. */
+.rb-csf {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 18px 0;
+}
+.rb-csf span {
+  padding: 5px 12px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--rb-card);
+  color: var(--rb-faint);
+  border: 1px solid var(--rb-rule);
+}
+.rb-csf span.is-on {
+  background: var(--rb-brand);
+  color: #fff;
+  border-color: var(--rb-brand);
+  font-weight: 600;
+}
+
+/* ── Agent sensor coverage grid ──────────────────────────────────
+   2-up grid of agent rows. Each row: status dot · monospace
+   hostname · status label (right-aligned). Replaces an earlier
+   misuse of .rb-lifecycle (3-col grid) which was wrapping
+   monospace hostnames mid-character because the column was
+   sized for short timestamps, not POS-TERMINAL-01-style names. */
+.rb-agents {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 18px;
+  margin-top: 8px;
+}
+.rb-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 11px;
+  border-bottom: 1px dotted var(--rb-rule);
+}
+.rb-agent:last-child,
+.rb-agent:nth-last-child(2):nth-child(odd) {
+  border-bottom: 0;
+}
+.rb-agent .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.rb-agent .dot.on  { background: var(--rb-success); }
+.rb-agent .dot.off { background: var(--rb-danger); }
+.rb-agent .name {
+  font-family: var(--rb-mono);
+  color: var(--rb-ink);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rb-agent .status {
+  margin-left: auto;
+  font-family: var(--rb-mono);
+  font-size: 9px;
+  color: var(--rb-faint);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Pending lifecycle entries get italicised black labels — forensic
+   convention: italic for absence of an event. */
+.rb-lifecycle li.is-pending strong {
+  font-style: italic;
+  color: var(--rb-ink);
+  font-weight: 500;
+}
+
+/* ── Top attacker IP rows — bar visualization ────────────────────
+   Replaces the plain ordered list with a 4-column row: IP (mono) ·
+   country code · proportional brand-color bar · count. Reader can
+   scan dominant IPs at a glance via the bar widths. */
+.rb-ip-row {
+  display: grid;
+  grid-template-columns: 130px 30px 1fr 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px dotted var(--rb-rule);
+}
+.rb-ip-row:last-child { border-bottom: 0; }
+.rb-ip-row .ip {
+  font-family: var(--rb-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--rb-ink);
+}
+.rb-ip-row .country {
+  font-family: var(--rb-mono);
+  font-size: 9px;
+  color: var(--rb-faint);
+  letter-spacing: 0.06em;
+}
+.rb-ip-row .bar {
+  height: 6px;
+  background: var(--rb-card-soft);
+  border-radius: 1px;
+  border: 1px solid var(--rb-rule);
+  overflow: hidden;
+}
+.rb-ip-row .bar > span {
+  display: block;
+  height: 100%;
+  background: var(--rb-brand);
+  border-radius: 1px;
+}
+.rb-ip-row .count {
+  font-family: var(--rb-mono);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+  color: var(--rb-ink);
+}
+
+/* ── Auth panel — success / failure with stacked bar ─────────────
+   Equal-weight large numbers, ink-colored italicised small labels,
+   stacked proportion bar at the bottom, failure-rate-% tagline. */
+.rb-auth__success,
+.rb-auth__failure {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  margin-top: 4px;
+}
+.rb-auth__success { color: var(--rb-ink); }
+.rb-auth__failure { color: var(--rb-danger); }
+
+.rb-auth__success small,
+.rb-auth__failure small {
+  color: var(--rb-ink);
+  font-weight: 500;
+  font-style: italic;
+  font-size: 13px;
+  margin-left: 6px;
+}
+.rb-auth__bar {
+  display: flex;
+  height: 8px;
+  margin-top: 14px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--rb-card-soft);
+}
+.rb-auth__bar > .ok   { background: var(--rb-success); }
+.rb-auth__bar > .fail { background: var(--rb-danger); }
+.rb-auth__rate {
+  font-size: 10px;
+  color: var(--rb-faint);
+  margin-top: 6px;
+  font-family: var(--rb-mono);
+}
+
+/* ── Top 3 threats — numbered list with brand-color counts ───────
+   Replaces the plain ordered list with a 3-column grid (numeral ·
+   threat label · count). Mono numerals + brand-color counts read
+   as data-list rather than prose. */
+.rb-threats {
+  margin: 10px 0 0 0;
+  padding: 0;
+  list-style: none;
+}
+.rb-threats li {
+  display: grid;
+  grid-template-columns: 24px 1fr 50px;
+  padding: 8px 0;
+  border-top: 1px solid var(--rb-rule-soft);
+  align-items: baseline;
+  gap: 8px;
+}
+.rb-threats li:first-child { border-top: 0; }
+.rb-threats .n {
+  font-family: var(--rb-mono);
+  font-size: 11px;
+  color: var(--rb-faint);
+}
+.rb-threats .t {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--rb-ink);
+}
+.rb-threats .c {
+  font-family: var(--rb-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--rb-brand);
+  font-weight: 600;
+  text-align: right;
+}
+
+/* ── Alert card ────────────────────────────────────────────────── */
+.rb-alert {
+  background: var(--rb-card);
+  border: 1px solid var(--rb-rule);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 10px;
+}
+.rb-alert[data-sev="CRITICAL"]      { border-left-color: #dc2626; }
+.rb-alert[data-sev="HIGH"]          { border-left-color: #ea580c; }
+.rb-alert[data-sev="MEDIUM"]        { border-left-color: #d97706; }
+.rb-alert[data-sev="LOW"]           { border-left-color: #16a34a; }
+.rb-alert[data-sev="INFORMATIONAL"] { border-left-color: #1e40af; }
+.rb-alert__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.rb-alert__title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 6px 0 0;
+}
+.rb-alert__title small {
+  color: var(--rb-faint);
+  font-weight: 400;
+}
+
+/* ── Lifecycle ──────────────────────────────────────────────────
+   3-column grid: pip dot · label · monospace timestamp/meta.
+   Pip colours track event type — brand for "alert arrived",
+   warn for ack, success for resolved, muted for pending. Reads
+   as a forensic timeline rather than a plain bullet list. */
+.rb-lifecycle {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+.rb-lifecycle li {
+  display: grid;
+  grid-template-columns: 8px 130px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px dotted var(--rb-rule-soft);
+}
+.rb-lifecycle li:last-child { border-bottom: 0; }
+.rb-lifecycle .pip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  align-self: center;
+  flex-shrink: 0;
+}
+.rb-lifecycle .pip.brand   { background: var(--rb-brand); }
+.rb-lifecycle .pip.warn    { background: var(--rb-warn); }
+.rb-lifecycle .pip.success { background: var(--rb-success-deep); }
+.rb-lifecycle .pip.muted   { background: var(--rb-faint); }
+.rb-lifecycle strong { color: var(--rb-ink); font-weight: 600; }
+.rb-lifecycle .rb-meta { font-family: var(--rb-mono); }
+.rb-lifecycle li.note { font-style: italic; color: var(--rb-mute); }
+
+/* ──────────────────────────────────────────────────────────────────
+   COVER · Marker treatment (screen-mode layout)
+
+   The print version in the @media print block below uses 96pt for
+   the giant typographic title plus min-height: 245mm to fill an A4
+   page band. The screen version here is the visual equivalent at a
+   browser-friendly scale — same flex / grid structure, same brand
+   stripe + eyebrow chip + 2x2 metadata grid, just at ~60% of the
+   print sizes so it reads cleanly inside a viewport instead of
+   needing scroll.
+
+   Padding for .rb-cover comes from an inline style="padding: 28px
+   36px" in templates/_report_print.html — kept inline so a future
+   tweak doesn't accidentally fight the @media print padding rule
+   via specificity. Screen-only padding additions go on inner
+   elements, not the .rb-cover root.
+   ────────────────────────────────────────────────────────────── */
+.rb-cover {
+  display: flex;
+  flex-direction: column;
+}
+
+.rb-cover__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--rb-rule);
+}
+.rb-cover__brand .dot {
+  width: 14px;
+  height: 14px;
+  background: var(--rb-brand);
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.rb-cover__brand .name {
+  font-family: var(--rb-display);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--rb-ink);
+}
+.rb-cover__brand .id {
+  margin-left: auto;
+  font-family: var(--rb-mono);
+  font-size: 11px;
+  color: var(--rb-faint);
+  letter-spacing: 0.04em;
+}
+
+.rb-cover__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 28px;
+  font-size: 12px;
+  color: var(--rb-mute);
+}
+.rb-cover__eyebrow .marker {
+  padding: 3px 10px;
+  border: 1px solid var(--rb-brand);
+  color: var(--rb-brand);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  border-radius: 3px;
+}
+
+.rb-cover__title {
+  font-family: var(--rb-display);
+  font-size: 56px;
+  font-weight: 700;
+  line-height: 0.92;
+  letter-spacing: -0.035em;
+  margin: 18px 0 0;
+  color: var(--rb-ink);
+}
+.rb-cover__title em {
+  font-style: normal;
+  color: var(--rb-brand);
+}
+
+.rb-cover__lede {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--rb-ink-soft);
+  margin: 18px 0 0;
+  max-width: 65ch;
+  text-wrap: pretty;
+}
+.rb-cover__lede strong {
+  color: var(--rb-ink);
+  font-weight: 600;
+}
+
+.rb-cover__meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--rb-rule);
+  border-radius: 6px;
+  margin: 24px 0 0;
+  overflow: hidden;
+}
+.rb-cover__meta > div {
+  padding: 12px 16px;
+  border-right: 1px solid var(--rb-rule);
+  border-bottom: 1px solid var(--rb-rule);
+}
+.rb-cover__meta > div:nth-child(2n)        { border-right: 0; }
+.rb-cover__meta > div:nth-last-child(-n+2) { border-bottom: 0; }
+.rb-cover__meta dt {
+  font-size: 9px;
+  color: var(--rb-mute);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0;
+}
+.rb-cover__meta dd {
+  font-family: var(--rb-mono);
+  font-size: 12px;
+  margin: 4px 0 0;
+  font-weight: 500;
+  color: var(--rb-ink);
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   PRINT · Marker treatment
+
+   When @media print fires (browser Ctrl+P or Playwright PDF render
+   with emulate_media('print')), this block produces the Marker PDF:
+   big numerals cover, A4 margins, page-numbered footer with report
+   ID, sections start fresh per page, cards flatten, Appendix details
+   force-open.
+
+   Layered ON TOP of design-tokens.css's @media print block (which
+   loads first). On conflicts, this block wins via source order.
+   ────────────────────────────────────────────────────────────── */
+@media print {
+  @page {
+    size: A4;
+    margin: 18mm 16mm 22mm;
+    /* attr(data-report-id) in @page boxes only resolves against the
+       root element (per CSS spec) — setting it on .report-cover
+       wouldn't reach the footer. The report ID appears on the cover
+       page itself; keeping the footer simple ("Insight Shield ·
+       Security Audit Report") avoids an empty-trailing-separator
+       failure mode. */
+    @bottom-left {
+      content: "Insight Shield · Security Audit Report";
+      font-family: ui-monospace, "SF Mono", "Cascadia Code", "Source Code Pro", Consolas, monospace;
+      font-size: 9pt;
+      color: #9aa3b5;
+    }
+    @bottom-right {
+      content: counter(page) " / " counter(pages);
+      font-family: ui-monospace, "SF Mono", "Cascadia Code", "Source Code Pro", Consolas, monospace;
+      font-size: 9pt;
+      color: #9aa3b5;
+    }
+  }
+
+  /* Pure white paper — user feedback explicitly: 'thought i said
+     white no card shadows'. Paper tint dropped; the perceived
+     'shadow' was just the grey-to-white gradient between tinted
+     paper and white cards. With both at #ffffff there's no
+     boundary effect to mistake for a shadow. */
+  body, .report-body {
+    background: #ffffff !important;
+  }
+
+  /* Bureau cards: borders only, no fill. On white-on-white paper
+     the borders alone provide visual frame without producing a
+     shadow effect. box-shadow already none, but reasserted. */
+  .rb-panel,
+  .rb-strip,
+  .rb-grid-4,
+  .rb-kpi,
+  .rb-alert,
+  .rb-appx {
+    background: transparent !important;
+    border: 1px solid var(--rb-rule) !important;
+    box-shadow: none !important;
+  }
+  /* .rb-strip cells: keep grouped vertical dividers between cells. */
+  .rb-strip > div { border-right: 1px solid var(--rb-rule) !important; }
+  .rb-strip > div:last-child { border-right: 0 !important; }
+  /* .rb-alert keeps its severity-tinted left-border. */
+  .rb-alert { border-left-width: 3px !important; }
+  .rb-alert[data-sev="CRITICAL"]      { border-left-color: #dc2626 !important; }
+  .rb-alert[data-sev="HIGH"]          { border-left-color: #ea580c !important; }
+  .rb-alert[data-sev="MEDIUM"]        { border-left-color: #d97706 !important; }
+  .rb-alert[data-sev="LOW"]           { border-left-color: #16a34a !important; }
+  .rb-alert[data-sev="INFORMATIONAL"] { border-left-color: #1e40af !important; }
+
+  /* Cover (Marker) — replaces the on-screen plate cover at print time.
+     The cover wrapper drops its rounded-card chrome and fills exactly
+     one page via min-height + page-break-after:always. */
+  .report-cover {
+    padding: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    page-break-after: always;
+  }
+  .report-cover .rb-cover {
+    display: flex;
+    flex-direction: column;
+    /* A4 content height with our @page 18mm/22mm vertical margins
+       is 297-18-22 = 257mm. Cover sized to 245mm to leave headroom
+       so it never bleeds into page 2. Padding dropped because @page
+       margins already provide the breathing room. */
+    min-height: 245mm;
+    padding: 0;
+  }
+  .report-cover .rb-cover__brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--rb-rule);
+  }
+  .report-cover .rb-cover__brand .dot {
+    width: 14px;
+    height: 14px;
+    background: var(--rb-brand);
+    border-radius: 3px;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .report-cover .rb-cover__brand .name {
+    font-weight: 600;
+    font-size: 12pt;
+  }
+  .report-cover .rb-cover__brand .id {
+    margin-left: auto;
+    font-family: var(--rb-mono);
+    font-size: 9pt;
+    color: var(--rb-faint);
+  }
+  .report-cover .rb-cover__eyebrow {
+    margin-top: 28mm;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 10pt;
+    color: var(--rb-mute);
+  }
+  .report-cover .rb-cover__eyebrow .marker {
+    padding: 3px 10px;
+    border: 1px solid var(--rb-brand);
+    color: var(--rb-brand);
+    font-weight: 600;
+    border-radius: 2px;
+  }
+  .report-cover .rb-cover__title {
+    font-family: var(--rb-display);
+    font-size: 96pt;
+    font-weight: 700;
+    line-height: 0.92;
+    letter-spacing: -0.04em;
+    margin: 8mm 0 0;
+    color: var(--rb-ink);
+  }
+  .report-cover .rb-cover__title em {
+    font-style: normal;
+    color: var(--rb-brand);
+  }
+  .report-cover .rb-cover__lede {
+    font-size: 13pt;
+    line-height: 1.5;
+    color: var(--rb-ink-soft);
+    margin: 12mm 0 0;
+    max-width: 130mm;
+  }
+  .report-cover .rb-cover__meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border: 1px solid var(--rb-rule);
+    margin-top: auto;
+  }
+  .report-cover .rb-cover__meta > div {
+    padding: 14px 18px;
+    border-right: 1px solid var(--rb-rule);
+    border-bottom: 1px solid var(--rb-rule);
+  }
+  .report-cover .rb-cover__meta > div:nth-child(2n) { border-right: 0; }
+  .report-cover .rb-cover__meta > div:nth-last-child(-n+2) { border-bottom: 0; }
+  .report-cover .rb-cover__meta dt {
+    font-size: 8pt;
+    color: var(--rb-mute);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .report-cover .rb-cover__meta dd {
+    font-family: var(--rb-mono);
+    font-size: 11pt;
+    margin: 4px 0 0;
+    font-weight: 500;
+    color: var(--rb-ink);
+  }
+
+  /* Section page breaks: cover + TOC each fill a page; body sections
+     each open a new page. The id-anchored body sections are listed
+     explicitly so this rule ignores the cover/TOC sections. */
+  .report-toc,
+  .report-body section[id] {
+    page-break-before: always;
+  }
+  .report-toc {
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+  }
+
+  /* Cards flatten on paper (override the rounded-card screen UI).
+     break-inside:avoid is deliberately scoped to the SMALL structural
+     blocks (KPI cards, panels, strip) — NOT to .rb-alert. Per the
+     user's earlier "section properly when too long" feedback, long
+     alert cards must be allowed to flow across pages instead of
+     forcing one alert per page. The thin .rb-alert left-border + the
+     bottom margin already give per-alert visual separation; we don't
+     need to keep each whole. */
+  .rb-panel,
+  .rb-kpi,
+  .rb-strip {
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+  .rb-alert {
+    box-shadow: none !important;
+    /* break-inside intentionally NOT set — allow flow */
+  }
+  .rb-strip { border-radius: 0; }
+
+  /* Severity pill fills + alert left-border colors + lifecycle pips
+     + IP bar viz + auth stacked bar + CSF chip fills must all
+     survive Chromium's "save toner" default behaviour. */
+  .rb-pill,
+  .rb-sev-bar > span,
+  .rb-sev-row__bar > span,
+  .rb-ip-row .bar > span,
+  .rb-auth__bar > .ok,
+  .rb-auth__bar > .fail,
+  .rb-lifecycle .pip,
+  .rb-csf span.is-on,
+  .rb-alert {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* User-controlled appendix print: only entries the user has
+     explicitly expanded (`<details open>`) render in Ctrl+P print
+     output. Collapsed entries vanish entirely — no orphan summary
+     row stripped of its body. The /report.pdf Playwright path
+     still force-opens every <details> via page.evaluate (see
+     app.py /report.pdf docstring), so the Download PDF button
+     always produces a full archive regardless of expansion state.
+     Two surfaces, two intents:
+       Ctrl+P  — operator picks what to print, partial archive ok.
+       /report.pdf — full archive, click-once download. */
+  #appendix-raw details:not([open]) {
+    display: none !important;
+  }
+
+  /* If NO entries are expanded, hide the entire Appendix A section —
+     header chip + title + intro + button + zero open entries would
+     otherwise print as an orphan section. :has() (Chromium 105+,
+     Firefox 121+, Safari 15.4+) lets us match 'a section that
+     contains no open details' as a single CSS condition. The
+     Playwright PDF path is unaffected because page.evaluate
+     force-opens every <details> before page.pdf() fires, so the
+     :has(details[open]) check is always satisfied for /report.pdf. */
+  #appendix-raw:not(:has(details[open])) {
+    display: none !important;
+  }
+
+  /* Open <details> get block layout + dark JSON theme. The summary
+     remains visible; the inner pre paints the navy editor bg. */
+  details, details[open] { display: block; }
+  details > summary { list-style: none; }
+  details pre.raw-json {
+    max-height: none !important;
+    background: #0a0e1a !important;
+    color: #e2e8f0 !important;
+    border: 1px solid #1c2230 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Links lose underline + colour in print; readers don't click PDFs. */
+  a { color: inherit; text-decoration: none; }
+}

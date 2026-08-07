@@ -1,0 +1,101 @@
+{# Errors tab — runtime exception audit trail (error_log table, distinct
+   from audit_log which tracks user actions). Same layout as audit.html:
+   filter toolbar + scrollable table, included by settings.html?tab=errors. #}
+<section class="space-y-6">
+  <header>
+    <h1 class="text-2xl font-semibold text-slate-900">Errors</h1>
+    <p class="text-sm text-slate-500">
+      Server exceptions and reported client-side errors. Filter below.
+    </p>
+  </header>
+
+  <form method="get" action="{{ url_for('admin_settings.admin_settings') }}"
+        class="flex flex-wrap items-end gap-3 bg-white rounded-xl shadow-card border border-surface-200 p-4">
+    <input type="hidden" name="tab" value="errors">
+    <div class="w-32">
+      <label for="filter-source" class="block text-xs font-semibold text-slate-600 mb-1">Source</label>
+      <select id="filter-source" name="source"
+              class="w-full border border-surface-300 rounded-md px-3 py-2 text-sm">
+        <option value="" {% if not filter_source %}selected{% endif %}>All</option>
+        <option value="server" {% if filter_source == 'server' %}selected{% endif %}>Server</option>
+        <option value="client" {% if filter_source == 'client' %}selected{% endif %}>Client</option>
+      </select>
+    </div>
+    <div class="w-44">
+      <label for="filter-module" class="block text-xs font-semibold text-slate-600 mb-1">Module</label>
+      <input id="filter-module" type="text" name="module" value="{{ filter_module }}"
+             {# Real values are request.endpoint, which is blueprint-qualified
+                since the route split — "dashboards.dashboard_it", not
+                "app.dashboard_it". A placeholder nobody can match on is worse
+                than none. #}
+             placeholder="e.g. dashboards.dashboard_it"
+             class="w-full border border-surface-300 rounded-md px-3 py-2 text-sm">
+    </div>
+    <div class="w-36">
+      <label for="filter-error-from" class="block text-xs font-semibold text-slate-600 mb-1">From</label>
+      <input id="filter-error-from" type="date" name="from" value="{{ filter_error_from }}"
+             class="w-full border border-surface-300 rounded-md px-3 py-2 text-sm">
+    </div>
+    <div class="w-36">
+      <label for="filter-error-to" class="block text-xs font-semibold text-slate-600 mb-1">To</label>
+      <input id="filter-error-to" type="date" name="to" value="{{ filter_error_to }}"
+             class="w-full border border-surface-300 rounded-md px-3 py-2 text-sm">
+    </div>
+    <div class="flex items-end gap-2 ml-auto">
+      <button type="submit"
+              class="rounded-md border border-surface-300 hover:bg-surface-50 text-sm font-semibold px-3 py-2 text-slate-700">
+        Apply
+      </button>
+      <a href="{{ url_for('admin_settings.admin_settings', tab='errors') }}"
+         class="rounded-md border border-surface-300 hover:bg-surface-50 text-sm font-semibold px-3 py-2 text-slate-700">
+        Clear
+      </a>
+    </div>
+  </form>
+
+  <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
+    {% if error_rows %}
+    <div class="table-scroll">
+    <table class="w-full text-sm">
+      <thead class="bg-surface-50 text-slate-600 sticky top-0">
+        <tr>
+          <th class="text-left px-4 py-2 font-semibold">Timestamp</th>
+          <th class="text-left px-4 py-2 font-semibold">Source</th>
+          <th class="text-left px-4 py-2 font-semibold">Module</th>
+          <th class="text-left px-4 py-2 font-semibold">Type</th>
+          <th class="text-left px-4 py-2 font-semibold">Message</th>
+          <th class="text-left px-4 py-2 font-semibold">Actor</th>
+          <th class="text-left px-4 py-2 font-semibold">Path</th>
+          <th class="text-left px-4 py-2 font-semibold">Traceback</th>
+        </tr>
+      </thead>
+      <tbody>
+{% for r in error_rows %}
+  <tr class="border-t border-surface-200 align-top">
+    <td class="px-4 py-2 font-mono text-xs text-slate-700 whitespace-nowrap">{{ r.ts | forensic_ts }}</td>
+    <td class="px-4 py-2 text-slate-600 whitespace-nowrap">{{ r.source }}</td>
+    <td class="px-4 py-2 font-mono text-xs text-slate-700 whitespace-normal break-all">{{ r.module or '—' }}</td>
+    <td class="px-4 py-2 font-semibold text-slate-900 whitespace-normal break-all">{{ r.exc_type or '—' }}</td>
+    <td class="px-4 py-2 text-xs text-slate-700 max-w-md whitespace-normal break-all">{{ r.message or '—' }}</td>
+    <td class="px-4 py-2 text-slate-800 whitespace-normal">{{ r.actor or '—' }}</td>
+    <td class="px-4 py-2 font-mono text-xs text-slate-600 whitespace-normal break-all">{{ r.path or '—' }}</td>
+    <td class="px-4 py-2 text-xs">
+      {% if r.traceback %}
+      <details>
+        <summary class="cursor-pointer text-brand-700">show</summary>
+        <pre class="mt-2 max-w-md whitespace-pre-wrap break-all text-slate-600">{{ r.traceback }}</pre>
+      </details>
+      {% else %}
+      —
+      {% endif %}
+    </td>
+  </tr>
+{% endfor %}
+</tbody>
+    </table>
+    </div>{# /.table-scroll wrapper #}
+    {% else %}
+      <p class="p-6 text-slate-500 text-sm">No errors match the current filter.</p>
+    {% endif %}
+  </div>
+</section>

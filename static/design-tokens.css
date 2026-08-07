@@ -1,0 +1,549 @@
+/* Insight Shield Design Tokens — navy blue brand, WCAG-AA severity scale */
+/* Light-only, desktop-first. Consumed by _base.html via Tailwind inline config. */
+
+:root {
+  /* Brand — navy blue (security-ops). Round F follow-up: rotated from the
+     bright teal/cyan scale (#06b6d4 family) to a darker, more authoritative
+     navy-blue scale per user direction. Primary anchored at Tailwind's
+     blue-600 (#2563eb) — slightly darker than blue-500 (#3b82f6) so the
+     header brand box, primary CTAs, focus ring, and toast left-border
+     read as "ops console" rather than "consumer app". Every consumer
+     (badges via brand-700 text, focus-ring via brand-500, login dot via
+     brand-700, audit Download CSV via brand-500/600) follows automatically
+     because they reference the --brand-* tokens, not literal hex. */
+  --brand-50:  #eff6ff;
+  --brand-100: #dbeafe;
+  --brand-200: #bfdbfe;
+  --brand-300: #93c5fd;
+  --brand-400: #60a5fa;
+  --brand-500: #2563eb;  /* primary — blue-600, deliberately darker than blue-500 */
+  --brand-600: #1d4ed8;  /* hover state — blue-700 */
+  --brand-700: #1e40af;  /* text-on-light — blue-800 */
+  --brand-800: #1e3a8a;
+  --brand-900: #172554;
+
+  /* Surface scale */
+  --surface-0:  #ffffff;
+  --surface-50: #f8fafc;
+  --surface-100:#f1f5f9;
+  --surface-200:#e2e8f0;
+  --surface-300:#cbd5e1;
+  --surface-700:#334155;
+  --surface-900:#0f172a;
+  /* Raw-JSON dark pane (alert_detail.html Attack Trail tab + report.html
+     Appendix A) — deliberately near-black, deeper than --surface-900, to
+     match the Prism Tomorrow theme's own background. Was hardcoded as
+     bg-[#0a0e1a] independently in both templates; single source now. */
+  --surface-raw-json: #0a0e1a;
+
+  /* Layout — content max-width.
+     Single source of truth so header / main / footer in _base.html align
+     perfectly on wide monitors. 90rem (≈1440px) halves the side margins
+     vs. Tailwind's max-w-7xl (80rem) on 1920px displays while still
+     keeping prose lines comfortable. */
+  --content-max-width: 90rem;
+
+  /* Text */
+  --text-primary:   #0f172a;  /* 16.1:1 on white */
+  --text-secondary: #475569;  /* 7.2:1 on white */
+  --text-muted:     #64748b;  /* 4.7:1 on white */
+  --text-inverse:   #ffffff;
+
+  /* Severity (AA-verified against white backgrounds) */
+  --sev-info-bg:  #eff6ff;  --sev-info-fg:  #1e40af;  --sev-info-border: #3b82f6;
+  --sev-low-bg:   #ecfdf5;  --sev-low-fg:   #065f46;  --sev-low-border:  #10b981;
+  --sev-med-bg:   #fffbeb;  --sev-med-fg:   #92400e;  --sev-med-border:  #f59e0b;
+  --sev-high-bg:  #fff7ed;  --sev-high-fg:  #9a3412;  --sev-high-border: #ea580c;
+  --sev-crit-bg:  #fef2f2;  --sev-crit-fg:  #991b1b;  --sev-crit-border: #dc2626;
+
+  /* Agent / system status (Round 5 consumer; defined here so the design-token
+     vocabulary is set in Round 1 before any template references it) */
+  --status-online:    #10b981;  /* green   — all systems operational */
+  --status-degraded:  #f59e0b;  /* amber   — partial offline */
+  --status-offline:   #dc2626;  /* red     — manager unreachable */
+
+  /* Focus ring (teal, 3px, 2px offset) */
+  --focus-ring: 0 0 0 2px var(--surface-0), 0 0 0 5px var(--brand-500);
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Shadow */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.06);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+
+  /* Typography — IBM Plex Sans (self-hosted, see @font-face below), falls
+     back to the system stack if the woff2 fails to load. Adopted from the
+     typeui.sh "Enterprise" preset's typography language; system stack kept
+     as the fallback chain, not replaced. */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Source Code Pro", Consolas, monospace;
+
+  /* Spacing (4px grid, exposed for custom CSS) */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px; --space-12: 48px;
+}
+
+/* ---------- Self-hosted webfont ----------
+   IBM Plex Sans, per the typeui.sh "Enterprise" preset. Self-hosted
+   (not a Google Fonts CDN <link>) so the app has no outbound network
+   dependency at runtime — matches the self-hosted Ubuntu VM deploy
+   target and the existing Tailwind-CDN-with-local-fallback pattern in
+   _base.html. Single variable-font file covers weights 400-700; the
+   browser instances the correct weight from the range automatically.
+   (800, used by .health-score-number, isn't available for this family
+   even from Google's own CDN — it falls back to the nearest real
+   weight, a negligible difference for one hero number.) */
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("fonts/IBMPlexSans-variable.woff2") format("woff2");
+}
+
+/* ---------- Base resets ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html { font-family: var(--font-sans); color: var(--text-primary); background: var(--surface-50); }
+body { margin: 0; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+
+:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-sm); }
+
+/* Skip-to-content */
+.skip-link {
+  position: absolute; left: -9999px; top: 0;
+  background: var(--brand-700); color: var(--text-inverse);
+  padding: var(--space-3) var(--space-4); z-index: 1000;
+  border-radius: 0 0 var(--radius-md) 0; font-weight: 600;
+}
+.skip-link:focus { left: 0; }
+
+/* ---------- Severity badges ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: 2px var(--space-2); border-radius: 999px;
+  font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em;
+  border: 1px solid transparent; line-height: 1.4;
+}
+.badge-info { background: var(--sev-info-bg); color: var(--sev-info-fg); border-color: var(--sev-info-border); }
+.badge-low  { background: var(--sev-low-bg);  color: var(--sev-low-fg);  border-color: var(--sev-low-border); }
+.badge-med  { background: var(--sev-med-bg);  color: var(--sev-med-fg);  border-color: var(--sev-med-border); }
+.badge-high { background: var(--sev-high-bg); color: var(--sev-high-fg); border-color: var(--sev-high-border); }
+.badge-crit { background: var(--sev-crit-bg); color: var(--sev-crit-fg); border-color: var(--sev-crit-border); }
+
+/* ---------- Status dots (one class, color via CSS token) ---------- */
+/* Used by severity bar (Round 6), agent status (Round 5), login indicator,
+   and anywhere else a colored state-circle is needed. Single source of truth.
+   Caller passes the color via inline style="background-color: var(--TOKEN);". */
+.dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot--sm { width: 10px; height: 10px; }
+
+/* ---------- Severity row accent (left bar on alert rows/cards) ----------
+   Uses box-shadow inset rather than border-left so the 4px bar doesn't
+   add layout width — SSE-prepended rows on /dashboard/it no longer cause
+   the neighbouring columns to jitter horizontally. Visually identical to
+   border-left; structurally a paint operation, not a layout perturbation. */
+.sev-accent-info  { box-shadow: inset 4px 0 0 var(--sev-info-border); }
+.sev-accent-low   { box-shadow: inset 4px 0 0 var(--sev-low-border); }
+.sev-accent-med   { box-shadow: inset 4px 0 0 var(--sev-med-border); }
+.sev-accent-high  { box-shadow: inset 4px 0 0 var(--sev-high-border); }
+.sev-accent-crit  { box-shadow: inset 4px 0 0 var(--sev-crit-border); }
+
+/* ---------- Toast ---------- */
+.toast-region {
+  position: fixed; bottom: var(--space-6); right: var(--space-6);
+  display: flex; flex-direction: column; gap: var(--space-2);
+  z-index: 900; max-width: 380px;
+}
+.toast {
+  background: var(--surface-0); color: var(--text-primary);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
+  padding: var(--space-3) var(--space-4);
+  border-left: 4px solid var(--brand-500);
+  animation: toast-in 180ms ease-out;
+}
+.toast-success { border-left-color: var(--sev-low-border); }
+.toast-error   { border-left-color: var(--sev-crit-border); }
+.toast-warn    { border-left-color: var(--sev-med-border); }
+.toast-info    { border-left-color: var(--brand-500); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- Shimmer (device monitoring pulse) ---------- */
+.shimmer {
+  background: linear-gradient(90deg, var(--surface-100) 25%, var(--surface-200) 50%, var(--surface-100) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s infinite linear;
+}
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* ---------- Tabs (Attack Trail) ---------- */
+[role="tablist"] { display: flex; gap: var(--space-1); border-bottom: 1px solid var(--surface-200); }
+[role="tab"] {
+  padding: var(--space-2) var(--space-4);
+  border: none; background: transparent; cursor: pointer;
+  color: var(--text-secondary); font-weight: 500;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+[role="tab"][aria-selected="true"] {
+  color: var(--brand-700); border-bottom-color: var(--brand-500);
+}
+[role="tab"]:hover { color: var(--brand-700); }
+[role="tabpanel"] { padding: var(--space-4) 0; }
+
+/* ---------- Filter toolbar (dashboard_it Alert Filters) ---------- */
+#alert-filters[role="toolbar"] {
+  display: flex; gap: var(--space-1); border-bottom: 1px solid var(--surface-200);
+}
+#alert-filters[role="toolbar"] [aria-pressed] {
+  padding: var(--space-2) var(--space-4);
+  border: none; background: transparent; cursor: pointer;
+  color: var(--text-secondary); font-weight: 500;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+#alert-filters[role="toolbar"] [aria-pressed="true"] {
+  color: var(--brand-700); border-bottom-color: var(--brand-500);
+}
+#alert-filters[role="toolbar"] [aria-pressed]:hover { color: var(--brand-700); }
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  .shimmer { animation: none; background: var(--surface-100); }
+}
+
+/* ---------- Hidden-attribute override ----------
+   Tailwind utility classes like .grid / .flex / .block tie on specificity with
+   the UA [hidden] rule and win on source order, so the hidden attribute
+   becomes visually meaningless on elements that also carry a display utility
+   (all our modals). This single !important rule restores the expected
+   semantics: if hidden is present, the element does not render. */
+[hidden] { display: none !important; }
+
+/* ---------- v2 redesign additions (HANDOFF §4) ---------- */
+/* Severity variable aliases already defined above (lines 33-37); not duplicated. */
+
+/* Updated in UI rework Round A — match prototype: 2.5rem (was 3rem),
+   weight 800 (was 700), and tabular-nums so digits sit in fixed-width
+   slots (the manager health gauge ticks 100 -> 99 without re-flowing). */
+.health-score-number {
+  font-size: 2.5rem;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.action-card {
+  border-radius: var(--radius-xl);
+  border-width: 2px;
+  border-style: solid;
+  padding: 1rem 1.25rem;
+}
+
+/* ---------- UI rework Round A utilities ---------- */
+/* Caps the IT alerts table height; matches prototype's table-scroll wrapper.
+   Combined with the .sev-accent-* box-shadow swap above, this lets the
+   severity bar on each row stay anchored as new SSE alerts prepend. */
+.table-scroll  { max-height: 420px; overflow-y: auto; }
+
+/* Caps the agents side panel (used by dashboard_it.html in Round C). */
+.agents-scroll { max-height: 300px; overflow-y: auto; }
+
+/* Pins the Actions/Lifecycle sidebar on /alert/<id> while the user
+   scrolls the forensic detail block. Round C wraps the right column in
+   <aside class="detail-right"> to opt in. */
+.detail-right  { position: sticky; top: 1rem; }
+
+/* Two-line description clamp for the manager dashboard alert feed.
+   Used by Round C; defined here so the utility is centralised. */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---------- UI rework Round D utilities (extended in Round I follow-up) ---------- */
+/* Word-wrap the Raw JSON regions (alert detail Raw JSON tab AND the audit
+   report Appendix A entries) so long URLs / encoded blobs / device paths
+   don't force horizontal scroll past the card boundary.
+
+   The inner <code class="language-json"> targeted by Prism syntax-highlighting
+   ships with its own `white-space: pre` rule that CASCADES OVER the parent
+   <pre>'s `pre-wrap` — that's the bug that caused the audit report's
+   Appendix A entries to push past their card width while the alert-detail
+   tab (sitting inside <aside class="detail-right"> with its own min-w-0
+   safety net) happened to survive. The !important on the <code> child
+   selector defeats Prism's cascade. max-width: 100% + display: block
+   constrain the box geometry even if Prism rewrites the inline layout.
+
+   overflow-wrap: anywhere lets the browser break inside an unbroken token
+   (e.g. a base64 string, an absolute Windows path with no spaces) when
+   there's no natural break point. tab-size: 2 matches json.dumps(indent=2). */
+pre.raw-json,
+pre.raw-json code {
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-word;
+  tab-size: 2;
+}
+pre.raw-json code {
+  display: block;
+  max-width: 100%;
+}
+
+/* ---------- Layout-stability safety nets ---------- */
+/* Force the alert-detail right sidebar to respect its 320px grid track.
+   Without min-width: 0, a child wider than 320px (long resolve note,
+   unbreakable string in the lifecycle timeline, or a wide pre/code from
+   the attack-trail tabs) would expand the column and spill outside the
+   viewport. min-w-0 on the <aside> is the fix; overflow-wrap and the
+   pre/code wrap rules below are the belt to its braces. */
+aside.detail-right {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+.detail-right {
+  width: 100%;
+  max-width: 100%;
+}
+aside .raw-json,
+aside pre {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+/* Global last-resort: if anything inside <main> still tries to overflow
+   horizontally, contain it instead of producing a page-wide scrollbar.
+   Inner scroll regions (overflow-x-auto on the IT alerts table wrapper,
+   the .table-scroll utility) keep working — they own their own context. */
+main {
+  overflow-x: hidden;
+}
+
+/* ---------- Round F — Service Configuration card utilities ---------- */
+/* Settings page redesign: each service card shows status row + masked
+   summary + actions row. The visual baseline matches the existing AI
+   Providers section (.bg-white .rounded-xl .shadow-card .border .p-6),
+   so .service-card is a thin wrapper for future tweak surface — current
+   styling is delegated to Tailwind utility classes in the template. */
+.service-card {
+  /* No declarations yet — reserved as a hook for cross-card tweaks. */
+}
+
+/* Status row: dot + label + (optional) inline test-result. Inline-flex
+   keeps everything on one line; gap-2 spacing matches the rest of the UI. */
+.status-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Status label sits next to a .dot. Uppercase short labels (Online /
+   Offline / Unknown) read at the same density as the table severity
+   abbreviations from Round D. */
+.status-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Inline Test result — slides in next to the status label after a Test
+   click, fades after 4s via the fade-out modifier set by the JS. */
+.test-result {
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: opacity 250ms ease-out;
+}
+.test-result--success { color: var(--status-online); }
+.test-result--error   { color: var(--status-offline); }
+.test-result--fading  { opacity: 0; }
+
+/* Active/Deactivated pill button — used on SMS + Telegram x2 cards only
+   per Round F §17.4. Color tracks the same --status-* tokens as the
+   status row, so the toggle reads as "this is muted" in the same palette
+   as "this service is offline". */
+.toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 4px var(--space-2);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.toggle-btn--active {
+  background: color-mix(in srgb, var(--status-online) 12%, white);
+  color: var(--status-online);
+  border-color: color-mix(in srgb, var(--status-online) 35%, white);
+}
+.toggle-btn--inactive {
+  background: color-mix(in srgb, var(--status-offline) 10%, white);
+  color: var(--status-offline);
+  border-color: color-mix(in srgb, var(--status-offline) 35%, white);
+}
+.toggle-btn:hover { filter: brightness(0.97); }
+.toggle-btn:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 1px;
+}
+
+/* In-flight Test button — small spinning ring while the AJAX probe runs.
+   Replaces the static icon for ~200ms+ until the response arrives. */
+.spinner {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spinner-rotate 0.8s linear infinite;
+  vertical-align: -0.15rem;
+}
+@keyframes spinner-rotate {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2s; }
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Round G §18 — print-mode document treatment
+
+   This is the real implementation of the print rules. The earlier
+   round attempted to land them in static/style.css — which turns out
+   to be unlinked from any template, so those rules were dead code.
+   This block lives in design-tokens.css (loaded by _base.html line 15)
+   so it actually fires.
+
+   Activated when @media print is active (Ctrl+P from browser, or
+   Playwright's page.emulate_media('print') in the /report.pdf route).
+   Reshapes the on-screen card-based UI into a flat-flow document
+   modeled on security audit PDFs (Wazuh, NIST, PCI report formats).
+
+   Major transformations:
+     1. Hide screen-only orientation chrome (.no-print, body-level
+        <header>/<nav> from _base.html, modal overlays, skip-link).
+     2. Strip card UI: bg-white, rounded-xl, shadow-card, border —
+        replaced with flat-flow paragraphs + section headings with
+        a brand-color underline.
+     3. Section breaks: each top-level H2 in <main> starts a new
+        page. Cover and TOC each fill their own page via page-break-
+        after:always + height:100vh. Executive Summary's H2 is
+        excluded from the global "H2 starts a new page" rule because
+        the TOC's page-break-after already lands it at the top of
+        page 3 — without the exclusion, an extra blank page appears.
+     4. Page-numbered footer via @page counters ("Page N of M").
+     5. Appendix A: <details> are force-opened (the route also calls
+        page.evaluate to set [open] on every <details>; the CSS rule
+        below is the belt to that braces). Raw-JSON pre is recoloured
+        for paper: black-on-white with a thin border, Prism Tomorrow
+        token classes neutralised so syntax stays readable on white.
+   ────────────────────────────────────────────────────────────── */
+@media print {
+  /* ── 1. Hide screen-only chrome ──────────────────────────────── */
+  body > header,
+  body > nav,
+  .no-print,
+  .modal-overlay,
+  [role="dialog"],
+  .skip-link,
+  .toast-region {
+    display: none !important;
+  }
+
+  /* ── 2. Page setup + base body typography ────────────────────── */
+  @page {
+    size: A4;
+    margin: 1.5cm 1.5cm 1.8cm 1.5cm;
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-size: 9pt;
+      color: #64748b;
+    }
+  }
+
+  body {
+    color: #0f172a !important;
+    font-size: 10pt !important;
+    line-height: 1.5 !important;
+  }
+
+  main {
+    overflow: visible !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+  }
+
+  /* ── 3. Heading-orphan prevention (cross-cutting, all pages) ────
+     Universal "keep the heading with its content" rule. Lives here
+     because every printed surface benefits — a heading at the
+     bottom of a page divorced from its body is always wrong. */
+  h2, h3, h4, h5, h6 {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+  h2 + *, h3 + *, h4 + * {
+    page-break-before: avoid;
+    break-before: avoid;
+  }
+  p, dt, dd, li {
+    widows: 3;
+    orphans: 3;
+  }
+
+  /* ── 4. Cover & TOC each fill exactly one page ───────────────────
+     Used by /report's _report_print.html partial. The Bureau v2
+     stylesheet (static/report-bureau.css) carries the on-cover
+     visual treatment (96pt Marker title, brand stripe, metadata
+     grid); these two rules are the cross-cutting page-flow part. */
+  .report-cover,
+  .report-toc {
+    page-break-after: always;
+    break-after: page;
+  }
+
+  /* ── 5. Severity pill / status fill print-color-adjust ──────────
+     Legacy Tailwind utility classes (bg-red-*, bg-orange-*, etc.)
+     used on non-report pages need print-color-adjust:exact so
+     coloured fills survive Chromium's "save toner" default. The
+     Bureau v2 components (.rb-pill, .rb-sev-bar, etc.) have their
+     own equivalent rule in static/report-bureau.css. */
+  .badge,
+  span[class*="bg-red-"],
+  span[class*="bg-orange-"],
+  span[class*="bg-amber-"],
+  span[class*="bg-green-"],
+  span[class*="bg-blue-"],
+  span[class*="bg-slate-"] {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Round G stage G3 stripped a large block of report-specific
+     print rules here (card-flatten, h2 brand-color underline, h3
+     top hairline, h4 sizing, #detect-csf > section dotted rules,
+     .report-cover h1 { 28pt }, .grid { display:block }, raw-JSON
+     recolour). Those rules pre-dated the Bureau v2 refactor and
+     actively fought it (e.g., 28pt H1 was overriding the 96pt
+     Marker cover title; section transparency was erasing Bureau
+     panel backgrounds). The Bureau treatment in static/report-
+     bureau.css now owns /report's print appearance entirely. */
+}

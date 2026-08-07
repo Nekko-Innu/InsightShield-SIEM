@@ -1,0 +1,44 @@
+# Environment variables — NEVER commit API keys
+.env
+.env.local
+ai_api_model.txt
+
+# Private keys and certificates
+*.pem
+*.key
+
+# SQLite database, its write-ahead log, and encrypted backups. The -wal and
+# -shm siblings exist whenever the app has the database open, so they will be
+# sitting in the working tree during normal development.
+*.db
+*.db-shm
+*.db-wal
+*.db.enc
+backups/
+
+# Rotating app log
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Dev-only seed script (its own docstring says "Not committed")
+seed_dev_alerts.py
+
+# PDF render samples — dev verification output, not source
+pdf-samples/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store

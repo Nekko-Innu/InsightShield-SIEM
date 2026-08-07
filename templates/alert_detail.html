@@ -1,0 +1,408 @@
+{% extends "_base.html" %}
+{% from "_icon.html" import icon %}
+{% block title %}Alert #{{ alert.id }} · Insight Shield{% endblock %}
+
+{% block head_extra %}
+{# Prism.js theme + core + JSON grammar — CDN primary, offline fallback to
+   static/vendor/. See reports/snoopy-brewing-widget.md §5.2.
+   Round F follow-up: switched from the default light theme (`prism.min.css`)
+   to the dark `prism-tomorrow.min.css` theme so the Raw JSON tab's dark
+   navy background actually pairs with token colors that read on it
+   (string=#7ec699, keyword=#cc99cd, number=#f08d49, comment=#999).
+   Served from static/vendor/ — the CDN copy and its onerror fallback are
+   gone, so the dark theme is now what loads rather than what loads first. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/prism-tomorrow-1.29.0.min.css') }}">
+<script src="{{ url_for('static', filename='vendor/prism-1.29.0.min.js') }}" defer></script>
+<script src="{{ url_for('static', filename='vendor/prism-json-1.29.0.min.js') }}" defer></script>
+{% endblock %}
+
+{% block content %}
+{% set sev = alert.severity|lower %}
+{% set cls = 'crit' if sev=='critical' else 'high' if sev=='high' else 'med' if sev=='medium' else 'low' if sev=='low' else 'info' %}
+
+{# Round G follow-up: Back-to-Dashboard upgraded from a plain text link
+   to the outlined ghost-button pattern shared with /admin/settings
+   and /account/password. Identical class strings keep the three
+   pages visually consistent — same border, same hover/focus brand
+   accent, same arrow-left icon. The previous <nav role="breadcrumb">
+   wrapper was inaccurate (a single Back link isn't a hierarchy);
+   dropped it to match the other two surfaces. #}
+<a href="{{ url_for('dashboards.dashboard') }}"
+   role="button"
+   class="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-md
+          border border-surface-200 bg-white text-slate-700
+          hover:bg-surface-50 hover:text-brand-700
+          focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1
+          transition-colors mb-4">
+  {{ icon("arrow-left", "w-4 h-4") }}
+  <span>Back to Dashboard</span>
+</a>
+
+{# UI rework Round C: two-column layout with sticky right sidebar.
+   Left column carries Hero / AI translation / IT recommendation / Forensic /
+   Attack trail. Right column (.detail-right) carries Lifecycle + ACK zone
+   so IT Admins can act on the alert without scrolling back to the top.
+   Round D follow-up: vertical rhythm consolidated to `space-y-4` at the
+   wrapper. Each child section dropped its `mb-4` so spacing is controlled
+   in one place — the previous mix of `space-y-0` (parent) + `mb-4` (every
+   child) read as contradictory configuration even though the visual gap
+   was correct. #}
+<div class="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+{# Round D §16: min-w-0 on the left grid child overrides CSS Grid's
+   implicit min-width:auto, letting the 1fr track shrink below the
+   intrinsic min-content width of unbreakable strings (Sysmon callTrace,
+   long file paths, MITRE technique IDs). Without this the grid expanded
+   wider than <main>, pushing the 320px sidebar off-screen — `overflow-x:
+   hidden` on <main> then clipped it, making the sidebar invisible. #}
+<div class="space-y-4 min-w-0">
+
+<!-- Hero -->
+<section class="bg-white rounded-xl shadow-card border border-surface-200 sev-accent-{{ cls }} p-6">
+  <div class="flex flex-wrap items-center gap-3 mb-2">
+    <span class="badge badge-{{ cls }} text-sm">{{ alert.severity }}</span>
+    <span class="font-mono text-sm text-slate-700">{{ alert.device_name}}</span>
+    <time datetime="{{ alert.timestamp }}" class="text-sm text-slate-500">{{ alert.timestamp | forensic_ts }}</time>
+    <span class="ml-auto text-sm">
+      {% if alert.resolved_at %}<span class="text-purple-700 font-medium">Resolved</span>
+      {% elif alert.acknowledged_at %}<span class="text-green-700 font-medium">IT acknowledged</span>
+      {% else %}<span class="text-red-700 font-medium">Open</span>{% endif %}
+    </span>
+  </div>
+  <h1 class="text-xl font-semibold text-slate-900">Alert #{{ alert.id }} · Rule {{ alert.rule_id }} · {{ alert.attack_type }}</h1>
+</section>
+
+<!-- AI translation -->
+<section aria-labelledby="ai-title" class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
+  <h2 id="ai-title" class="text-sm font-medium text-slate-500 mb-3">AI translation</h2>
+  <div class="text-slate-900 whitespace-pre-line leading-relaxed">{{ alert.plain_text|default('—') }}</div>
+  {% if alert.fk_grade %}<p class="mt-3 text-xs text-slate-500">FK grade: {{ alert.fk_grade }} · Provider: {{ alert.provider_used|default('—') }}</p>{% endif %}
+</section>
+
+{% if current_user.is_it_admin %}
+<!-- IT-only: Recommended Investigation Steps (Round 2 / Part 1) -->
+<section aria-labelledby="itrec-title"
+         class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
+  <h2 id="itrec-title" class="text-sm font-medium text-slate-500 mb-3">
+    Recommended Investigation Steps
+    <span class="text-xs text-slate-400 font-normal">(IT only)</span>
+  </h2>
+  {% if alert.it_recommendation and alert.it_recommendation != 'AI_CHAIN_EXHAUSTED' %}
+  <div class="text-slate-900 whitespace-pre-line leading-relaxed">{{ alert.it_recommendation }}</div>
+  {% elif alert.it_recommendation == 'AI_CHAIN_EXHAUSTED' %}
+  <p class="text-sm text-slate-500 italic">
+    All AI providers were unavailable when this alert arrived. Review the raw
+    Wazuh payload below and follow your standard runbook.
+  </p>
+  {% else %}
+  <p class="text-sm text-slate-500 italic">
+    Generating investigation steps… refresh in a few seconds.
+  </p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- Forensic Summary (IT only) -->
+{# Round D follow-up: section now renders unconditionally for IT Admins.
+   When the alert has no attack_trail (synthetic alert or pre-decoder
+   ingestion), the section shows fields derived from the alert row plus
+   an italic note — preserving consistent layout across all alerts so
+   investigators don't lose orientation when forensic enrichment is
+   unavailable. #}
+{% if current_user.is_it_admin %}
+<section aria-labelledby="forensic-title" class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
+  <h2 id="forensic-title" class="text-sm font-medium text-slate-500 mb-3">Forensic summary</h2>
+  {% if alert.attack_trail %}
+  {% set trail = alert.attack_trail|from_json if alert.attack_trail is string else alert.attack_trail %}
+  {% set tdata = trail.data if (trail.data is defined and trail.data is mapping) else {} %}
+  {% set trule = trail.rule if (trail.rule is defined and trail.rule is mapping) else {} %}
+  {% set tdecoder = (trail.decoder.name if (trail.decoder is defined and trail.decoder is mapping) else trail.decoder) if trail.decoder is defined else '' %}
+  <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+    {% if trail.agent %}
+    <dt class="text-slate-500">Agent</dt>
+    <dd class="text-slate-900 font-mono text-xs">{{ trail.agent.name|default(trail.agent.id|default('—')) }} ({{ trail.agent.ip|default('—') }})</dd>
+    {% endif %}
+
+    <dt class="text-slate-500">Attacker IP</dt>
+    <dd class="text-slate-900 font-mono text-xs">{{ derive_attacker_ip(alert) or '—' }}</dd>
+
+    {# Round D follow-up: pass `true` as second arg to |default so 0/None/""
+       all render as "—" (Jinja's default-only-on-undefined is the wrong
+       behaviour for numeric fields — a fresh rule with firedtimes=0 would
+       previously show literal "0" leaving the card looking half-empty). #}
+    <dt class="text-slate-500">Rule firing</dt>
+    <dd class="text-slate-900">{{ trule.firedtimes|default('—', true) }} times (frequency {{ trule.frequency|default('—', true) }})</dd>
+
+    <dt class="text-slate-500">Decoder · Location</dt>
+    <dd class="text-slate-900 font-mono text-xs">{{ tdecoder or '—' }} @ {{ trail.location|default('—') }}</dd>
+
+    {% if trule.mitre or trail.mitre %}
+    {% set mt = trule.mitre if trule.mitre else trail.mitre %}
+    <dt class="text-slate-500">MITRE ATT&CK</dt>
+    <dd class="text-slate-900">{{ mt.id|default('—') }} &mdash; {{ mt.technique|default('—') }}</dd>
+    {% endif %}
+
+    {% if trule.level is defined or trail.rule_level is defined %}
+    <dt class="text-slate-500">Rule level</dt>
+    <dd class="text-slate-900">{{ trule.level|default(trail.rule_level|default('—', true), true) }} &mdash; {{ trule.description|default(trail.rule_description|default('')) }}</dd>
+    {% endif %}
+  </dl>
+  {% else %}
+  <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+    <dt class="text-slate-500">Device</dt>
+    <dd class="text-slate-900 font-mono text-xs">{{ alert.device_name|default('—') }}</dd>
+
+    <dt class="text-slate-500">Attacker IP</dt>
+    <dd class="text-slate-900 font-mono text-xs">{{ derive_attacker_ip(alert) or '—' }}</dd>
+
+    <dt class="text-slate-500">Rule</dt>
+    <dd class="text-slate-900">#{{ alert.rule_id|default('—') }} &mdash; {{ alert.attack_type|default('—') }}</dd>
+
+    <dt class="text-slate-500">Severity</dt>
+    <dd class="text-slate-900">{{ alert.severity|default('—') }}</dd>
+  </dl>
+  <p class="mt-3 text-xs text-slate-500 italic">
+    No enriched forensic context captured for this alert. Wazuh decoder output
+    is unavailable, so MITRE technique, decoder, and rule-firing counts cannot
+    be shown. Fields above come from the alert row directly.
+  </p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- Attack Trail (IT only) -->
+{# Round D follow-up: section header always renders for IT Admins; the
+   tabbed Tree/Table/Raw JSON UI only appears when attack_trail data
+   exists. Without data, an italic stub explains why the panes are blank
+   so the section reads as a deliberate empty-state, not a render bug. #}
+{% if current_user.is_it_admin %}
+<section aria-labelledby="trail-title" class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
+  <h2 id="trail-title" class="text-sm font-medium text-slate-500 mb-3">Attack trail</h2>
+  {% if not alert.attack_trail %}
+  <p class="text-sm text-slate-500 italic">
+    No attack trail captured for this alert. The Wazuh agent did not forward
+    enriched event data &mdash; there is no decoder output, MITRE technique
+    mapping, or per-rule structured fields to display.
+  </p>
+  {% else %}
+  {% set trail = alert.attack_trail|from_json if alert.attack_trail is string else alert.attack_trail %}
+  {% set tdata = trail.data if (trail.data is defined and trail.data is mapping) else {} %}
+  {% set trule = trail.rule if (trail.rule is defined and trail.rule is mapping) else {} %}
+  {% set tagent = trail.agent if (trail.agent is defined and trail.agent is mapping) else {} %}
+  {% set arp = tdata.arp if (tdata.arp is defined and tdata.arp is mapping) else {} %}
+  {% set sys = tdata.syscheck if (tdata.syscheck is defined and tdata.syscheck is mapping) else {} %}
+  {% set rid = (trule.id|string) if trule.id is defined else (alert.rule_id|string) %}
+  {% set tdecoder = (trail.decoder.name if (trail.decoder is defined and trail.decoder is mapping) else trail.decoder) if trail.decoder is defined else '' %}
+  <div role="tablist" aria-label="Attack trail views">
+    <button role="tab" id="trail-tab-tree"  aria-selected="true"  aria-controls="trail-panel-tree">Tree</button>
+    <button role="tab" id="trail-tab-table" aria-selected="false" aria-controls="trail-panel-table" tabindex="-1">Table</button>
+    <button role="tab" id="trail-tab-json"  aria-selected="false" aria-controls="trail-panel-json"  tabindex="-1">Raw JSON</button>
+  </div>
+
+  <div id="trail-panel-tree" role="tabpanel" aria-labelledby="trail-tab-tree">
+    <pre class="font-mono text-xs bg-surface-50 p-4 rounded-md overflow-auto leading-relaxed max-h-[50vh]">Alert
+├─ When:     {{ alert.timestamp | forensic_ts }}
+├─ Severity: {{ alert.severity }}
+├─ Attacker
+│   ├─ IP:         {{ derive_attacker_ip(alert) or "—" }}
+│   └─ Rule fired: {{ trule.id|default(alert.rule_id|default("—")) }}{% set _rd = trule.description|default(trail.rule_description|default("")) %}{% if _rd %} — {{ _rd }}{% endif %}
+├─ Victim
+│   ├─ Agent:    {{ tagent.name|default(alert.device_name|default("—")) }} ({{ tagent.ip|default("—") }})
+│   ├─ Decoder:  {{ tdecoder or "—" }}
+│   └─ Location: {{ trail.location|default("—") }}
+├─ Rule context
+│   ├─ Level:          {{ trule.level|default(trail.rule_level|default("—", true), true) }}
+│   ├─ Fired times:    {{ trule.firedtimes|default("—", true) }}
+│   ├─ Frequency:      {{ trule.frequency|default("—", true) }}
+│   ├─ Groups:         {{ (trule.groups or []) | join(", ") or "—" }}
+│   └─ Wazuh alert id: {{ trail.wazuh_alert_id|default("—") }}
+├─ Technique-specific
+{%- if rid == "100010" %}
+│   ├─ Event ID:       {{ tdata.eventID|default("—") }}
+│   ├─ Source image:   {{ tdata.sourceImage|default("—") }}
+│   ├─ Target image:   {{ tdata.targetImage|default("—") }}
+│   └─ Granted access: {{ tdata.grantedAccess|default("—") }}
+{%- elif rid == "100020" %}
+│   ├─ Sender IP:  {{ arp.sender_ip|default(tdata.srcip|default("—")) }}
+│   ├─ Sender MAC: {{ arp.sender_mac|default("—") }}
+│   ├─ Target IP:  {{ arp.target_ip|default("—") }}
+│   └─ Target MAC: {{ arp.target_mac|default("—") }}
+{%- elif rid == "100030" %}
+│   ├─ Path:           {{ tdata.path|default("—") }}
+│   ├─ Syscheck path:  {{ sys.path|default("—") }}
+│   ├─ Syscheck event: {{ sys.event|default("—") }}
+│   └─ Renamed count:  {{ tdata.files_renamed_count|default("—") }}
+{%- elif rid == "100040" %}
+│   ├─ Protocol:  {{ tdata.proto|default("—") }}
+│   ├─ Flags:     {{ tdata.flags|default("—") }}
+│   ├─ Dest port: {{ tdata.dstport|default("—") }}
+│   └─ Count:     {{ tdata.count|default("—") }}
+{%- elif rid == "100002" %}
+│   ├─ Event ID:    {{ tdata.eventID|default("—") }}
+│   ├─ Status:      {{ tdata.status|default("—") }}
+│   ├─ Target user: {{ tdata.targetUserName|default("—") }}
+│   └─ Logon type:  {{ tdata.logonType|default("—") }}
+{%- else %}
+│   └─ (No technique-specific block for rule {{ rid }})
+{%- endif %}
+├─ Evidence
+│   └─ Full log:
+{{ trail.full_log|default("—") }}
+└─ AI translation
+    ├─ Provider: {{ alert.provider_used|default("—") }}
+    └─ Text:     {{ alert.plain_text|default("—")|replace("\n", "\n                 ") }}</pre>
+  </div>
+
+  <div id="trail-panel-table" role="tabpanel" aria-labelledby="trail-tab-table" hidden>
+    <table class="w-full text-sm">
+      <tbody class="divide-y divide-surface-100">
+        {# `is mapping` rather than just `|default({})`: dictsort raises on a
+           list, which takes the whole page down with a 500. Every other trail
+           access in this file already guards the same way. #}
+        {% for k, v in (trail if trail is mapping else {}) | dictsort %}
+        <tr>
+          <th scope="row" class="text-left text-xs text-slate-500 align-top py-1 pr-4 font-mono">{{ k }}</th>
+          <td class="py-1 text-slate-800 break-all font-mono text-xs">
+            {% if v is mapping %}<pre class="whitespace-pre-wrap">{{ v|tojson(indent=2) }}</pre>
+            {%- elif v is iterable and v is not string %}{{ v|join(", ") }}
+            {%- else %}{{ v }}{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div id="trail-panel-json" role="tabpanel" aria-labelledby="trail-tab-json" hidden>
+    <div class="flex justify-end mb-2">
+      <button type="button" data-copy="#trail-raw"
+              class="px-2 py-1 text-xs rounded-md border border-surface-200 hover:bg-surface-50">Copy JSON</button>
+    </div>
+    {# Round D: pipe through pretty_json (Jinja filter in web/filters.py) so the
+       payload renders multi-line, then apply .raw-json (design-tokens.css)
+       for white-space:pre-wrap + overflow-wrap:anywhere — long URLs and
+       base64 blobs no longer force horizontal scroll.
+       Round F follow-up: bg deepened from bg-surface-900 (#0f172a) to a
+       near-black navy (#0a0e1a) so the pane reads as a code-editor "dark
+       mode" surface, paired with Prism Tomorrow's syntax token colors
+       loaded in head_extra above. text-* class dropped — Prism's tokens
+       paint their own colors and the wrapping <code class="language-json">
+       inherits color: #ccc from Tomorrow for any token Prism doesn't class. #}
+    <pre class="raw-json text-xs bg-[var(--surface-raw-json)] p-4 rounded-md overflow-auto max-h-[60vh]"><code id="trail-raw" class="language-json">{{ alert.raw_alert | default(alert.attack_trail, true) | pretty_json }}</code></pre>
+    <p class="text-xs text-slate-500 mt-2">
+      Showing {{ "raw Wazuh payload" if alert.raw_alert else "curated attack trail" }}.
+    </p>
+  </div>
+  {% endif %}{# /attack-trail empty-state else #}
+</section>
+{% endif %}
+
+{# Close left column; open right column (sticky on lg+ via .detail-right
+   from design-tokens.css Round A). #}
+</div>
+<aside class="detail-right space-y-4 min-w-0">
+
+<!-- Lifecycle Timeline -->
+<section aria-labelledby="lifecycle-title" class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
+  <h2 id="lifecycle-title" class="text-sm font-medium text-slate-500 mb-3">Lifecycle</h2>
+  <ul class="space-y-2 text-sm">
+    <li class="flex gap-3">
+      <span class="text-red-600 shrink-0">●</span>
+      <div class="flex-1">
+        <div class="font-medium text-slate-900">Alert arrived</div>
+        <div class="text-xs text-slate-500 font-mono">{{ alert.timestamp | forensic_ts }}</div>
+      </div>
+    </li>
+    <li class="flex gap-3">
+      <span class="{{ 'text-green-600' if alert.acknowledged_at else 'text-slate-300' }} shrink-0">●</span>
+      <div class="flex-1">
+        <div class="font-medium text-slate-900">IT acknowledgment (stops escalation)</div>
+        {% if alert.acknowledged_at %}
+        <div class="text-xs text-slate-600">
+          by {{ alert.acknowledged_by|default('—') }}
+          {% if alert.response_time_s is not none %} &middot; Response time: {{ alert.response_time_s }} seconds{% endif %}
+        </div>
+        <div class="text-xs text-slate-500 font-mono">{{ alert.acknowledged_at | forensic_ts }}</div>
+        {% else %}
+        <div class="text-xs text-slate-400">Pending</div>
+        {% endif %}
+      </div>
+    </li>
+    <li class="flex gap-3">
+      <span class="{{ 'text-purple-600' if alert.resolved_at else 'text-slate-300' }} shrink-0">●</span>
+      <div class="flex-1">
+        <div class="font-medium text-slate-900">Resolved</div>
+        {% if alert.resolved_at %}
+        <div class="text-xs text-slate-600">by {{ alert.resolved_by|default('—') }}</div>
+        <div class="text-xs text-slate-500 font-mono">{{ alert.resolved_at | forensic_ts }}</div>
+        {% if alert.resolve_note %}<div class="text-xs text-slate-600 italic mt-1">Note: {{ alert.resolve_note }}</div>{% endif %}
+        {% else %}
+        <div class="text-xs text-slate-400">Pending</div>
+        {% endif %}
+      </div>
+    </li>
+  </ul>
+</section>
+
+<!-- ACK zone -->
+<section class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
+  <h2 class="text-sm font-medium text-slate-500 mb-3">Acknowledge</h2>
+  <div class="flex flex-wrap gap-3">
+    {% if current_user.is_it_admin and not alert.acknowledged_at %}
+      <button type="button" onclick="wpOpenModal('it-ack-modal')"
+              class="px-4 py-2 rounded-md bg-slate-900 text-white hover:bg-slate-800">
+        IT acknowledge & stop escalation
+      </button>
+    {% endif %}
+    {% if current_user.is_it_admin and alert.acknowledged_at and not alert.resolved_at %}
+      <button type="button" onclick="wpOpenModal('resolve-modal')"
+              class="px-4 py-2 rounded-md bg-purple-600 text-white hover:bg-purple-700">Mark as resolved</button>
+    {% endif %}
+  </div>
+  {% if alert.resolved_at %}
+    <p class="mt-3 text-xs text-purple-700">Resolved by {{ alert.resolved_by }} at {{ alert.resolved_at | forensic_ts }}</p>
+    {% if alert.resolve_note %}<p class="mt-1 text-xs text-slate-600 italic">{{ alert.resolve_note }}</p>{% endif %}
+  {% endif %}
+  <p class="mt-3 text-xs text-slate-500">Only IT Admin acknowledgment stops the 5-minute escalation timer.</p>
+</section>
+
+</aside>{# /detail-right #}
+</div>{# /two-column grid — modals stay outside, they overlay the whole viewport #}
+
+<!-- IT ACK confirmation modal -->
+<div id="it-ack-modal" hidden role="dialog" aria-modal="true" aria-labelledby="it-ack-modal-title"
+     class="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+  <div class="bg-white rounded-xl shadow-pop border border-surface-200 p-6 max-w-md w-full">
+    <h3 id="it-ack-modal-title" class="text-lg font-semibold text-slate-900 mb-2">Acknowledge and stop escalation?</h3>
+    <p class="text-sm text-slate-600 mb-4">This will stop the 5-minute escalation timer for this {{ alert.severity }} alert on {{ alert.device_name }}. Continue?</p>
+    <div class="flex justify-end gap-2">
+      <button type="button" data-modal-close
+              class="px-3 py-2 text-sm rounded-md border border-surface-200 hover:bg-surface-50">Cancel</button>
+      <form method="post" action="{{ url_for('alerts.it_acknowledge', alert_id=alert.id) }}" data-async-submit>
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit" class="px-3 py-2 text-sm rounded-md bg-brand-500 text-white hover:bg-brand-600">Confirm</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Resolve confirmation modal -->
+<div id="resolve-modal" hidden role="dialog" aria-modal="true" aria-labelledby="resolve-modal-title"
+     class="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+  <div class="bg-white rounded-xl shadow-pop border border-surface-200 p-6 max-w-md w-full">
+    <h3 id="resolve-modal-title" class="text-lg font-semibold text-slate-900 mb-2">Mark as resolved?</h3>
+    <p class="text-sm text-slate-600 mb-4">This marks the {{ alert.severity }} alert on {{ alert.device_name }} as fully investigated and closed.</p>
+    <form method="post" action="{{ url_for('alerts.resolve_alert', alert_id=alert.id) }}" data-async-submit>
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <label for="resolve-note" class="block text-sm font-medium text-slate-700 mb-1">Note (optional)</label>
+      <textarea id="resolve-note" name="resolve_note" rows="3" maxlength="500"
+                placeholder="e.g. False positive, patched endpoint, escalated to vendor..."
+                class="w-full rounded-md border border-surface-200 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 mb-4"></textarea>
+      <div class="flex justify-end gap-2">
+        <button type="button" data-modal-close
+                class="px-3 py-2 text-sm rounded-md border border-surface-200 hover:bg-surface-50">Cancel</button>
+        <button type="submit" class="px-3 py-2 text-sm rounded-md bg-purple-600 text-white hover:bg-purple-700">Confirm</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

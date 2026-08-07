@@ -1,0 +1,84 @@
+{# templates/_alert_row.html
+   Single alert <tr> for the IT dashboard.
+
+   Round 4: shared by dashboard_it.html (initial render via the for-loop
+   include) and wazuh_receiver.process_alert (renders this partial server-
+   side and pumps the resulting HTML through the SSE new_alert event's
+   row_html field). One source of truth — schema or copy changes here
+   propagate to both the initial render and the live SSE prepend.
+
+   Round F follow-up: Actions column dropped from the table. The whole
+   row is now clickable via an event-delegated handler in static/ui.js
+   that listens on #alerts-tbody and navigates to /alert/<id> on click.
+   Event delegation matters here because SSE prepends rows after the
+   initial page-load; a static querySelectorAll().forEach() would miss
+   them. cursor-pointer + hover:bg-surface-50 cue clickability.
+   title="..." tooltips added on the truncated cells (Device, Attacker
+   IP, Rule) so cut-off content stays accessible on hover.
+
+   Caller must provide:
+     a                   — the alert dict (db.get_alert output)
+     derive_attacker_ip  — Jinja global (registered in web/filters.py, defined
+                            in alerts_util.py) or explicit kwarg
+                            (wazuh_receiver passes it explicitly so the
+                            partial works under render_template even when
+                            no Flask app context is active).
+#}
+{% set sev = a.severity|lower %}
+{% set cls = 'crit' if sev=='critical' else 'high' if sev=='high' else 'med' if sev=='medium' else 'low' if sev=='low' else 'info' %}
+{# Round D follow-up: short severity labels for the dense IT alerts table.
+   Round F follow-up (2026-05-09): full word HIGH retained instead of the
+   earlier HI / HGH abbreviations — the column was widened to 9% (Round F
+   column rebalance) and the optional `(N/M)` escalation badge moved into
+   its own monospace span so the badge no longer competes for the same
+   horizontal slot as the severity pill. CRIT/MID/LOW/INFO stay at 3-4
+   chars. Full long-form name ("CRITICAL", "HIGH", …) preserved in the
+   badge's title="…" tooltip on hover. The dashboard severity-bar chart
+   uses the same vocabulary (CRIT/HIGH/MID/LOW/INFO) — single visual
+   register across both surfaces. #}
+{% set sev_short = {'crit':'CRIT','high':'HIGH','med':'MID','low':'LOW','info':'INFO'}[cls] %}
+{% set row_status = 'resolved' if a.resolved_at else ('it-ack' if a.acknowledged_at else 'open') %}
+{# Round 6: medium-frequency (N/M) escalation badge.
+   Pulled from attack_trail.rule which wazuh_receiver.process_alert
+   captures at ingest. Only renders when severity == MEDIUM and the rule
+   had a <frequency> block in custom_retail_rules.xml — i.e. the rule is
+   one occurrence away from auto-escalating to HIGH. #}
+{% set _trail = a.attack_trail | from_json if a.attack_trail else {} %}
+{% set _rule = _trail.get('rule') if _trail is mapping else {} %}
+{% set _freq_threshold = _rule.get('frequency') if _rule is mapping else None %}
+{% set _firedtimes = _rule.get('firedtimes') if _rule is mapping else None %}
+{% set _show_freq_badge = sev == 'medium' and _freq_threshold and _firedtimes %}
+<tr class="sev-accent-{{ cls }} hover:bg-surface-50 cursor-pointer"
+    data-alert-id="{{ a.id }}"
+    data-severity="{{ sev }}"
+    data-status="{{ row_status }}">
+    {# The data-search bag that used to live here — a lowercase duplicate of
+       every visible field, on every row — is gone. Search is a LIKE in
+       db.search_alerts now, so it reaches the whole table instead of the 50
+       rows that happened to be rendered. One loss, accepted: the bag held the
+       human-formatted timestamp, so "may 4" matched; only "2026-05-04" does
+       now. data-severity and data-status stay — the SSE consumer and
+       tests/test_ui.py both read them. #}
+  {# Round D follow-up: severity column dropped `truncate` — badges and
+     status pills are short, predictable text and should never be cut off
+     with an ellipsis. The catch-all `truncate` from the original layout
+     was inappropriate for this column. Description / Raw Log columns
+     keep `truncate` since they hold variable-length user content. #}
+  <td class="px-3 py-2 whitespace-nowrap">
+    <span class="badge badge-{{ cls }}" title="{{ a.severity }}">{{ sev_short }}</span>
+    {% if _show_freq_badge %}
+    <span class="ml-1 text-[10px] font-mono text-slate-500"
+          title="{{ _firedtimes }} out of {{ _freq_threshold }} occurrences needed to escalate to HIGH">({{ _firedtimes }}/{{ _freq_threshold }})</span>
+    {% endif %}
+  </td>
+  <td class="px-3 py-2 text-slate-600 truncate"><time datetime="{{ a.timestamp }}" data-humanize title="{{ a.timestamp | forensic_ts }}">{{ a.timestamp }}</time></td>
+  <td class="px-3 py-2 font-mono text-xs truncate" title="{{ a.device_name }}">{{ a.device_name }}</td>
+  <td class="px-3 py-2 font-mono text-xs truncate" title="{{ derive_attacker_ip(a) or '—' }}">{{ derive_attacker_ip(a) or "—" }}</td>
+  <td class="px-3 py-2 font-mono text-xs truncate" title="{{ a.rule_id }}">{{ a.rule_id }}</td>
+  <td class="px-3 py-2 truncate" title="{{ a.plain_text|default('—') }}">Alert #{{ a.id }} · Rule {{ a.rule_id }} · {{ a.attack_type|default('Alert') }}</td>
+  <td class="px-3 py-2 truncate">
+    {% if a.resolved_at %}<span class="text-purple-700 text-xs">Resolved</span>
+    {% elif a.acknowledged_at %}<span class="text-green-700 text-xs">IT acked</span>
+    {% else %}<span class="text-red-700 text-xs">Open</span>{% endif %}
+  </td>
+</tr>

@@ -1,0 +1,60 @@
+{# Round F §17 — Shared Edit modal for the Service Configuration redesign.
+
+   Rendered ONCE per page in settings.html. Hidden by default. The Edit
+   button on each service card sets `data-service="<key>"` which the JS
+   controller (settings.js, Stage F5) reads to:
+     1. Look up the service config (label, fields list, action URL).
+     2. Populate the title + the dynamic fields slot below.
+     3. Set the form's action attribute to the matching POST endpoint.
+     4. Show the modal.
+
+   The form posts to the EXISTING per-service endpoints introduced in
+   Round 3 (admin_settings_set_api_key, admin_settings_set_setting). No
+   new write surface — the redesign only changes how operators *get to*
+   those endpoints, not the endpoints themselves.
+
+   Pattern matches alert_detail.html ack/resolve modals: fixed-inset
+   overlay, white card, [data-modal-close] cancel button, [hidden]
+   default state. The wpOpenModal/wpCloseModal helpers and the [hidden]
+   override in design-tokens.css both apply.
+#}
+<div id="settings-edit-modal" hidden role="dialog" aria-modal="true"
+     aria-labelledby="settings-edit-modal-title"
+     class="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+  <div class="bg-white rounded-xl shadow-pop border border-surface-200 p-6 max-w-lg w-full">
+    <h3 id="settings-edit-modal-title"
+        class="text-lg font-semibold text-slate-900 mb-1">Edit service</h3>
+    <p id="settings-edit-modal-subtitle"
+       class="text-sm text-slate-500 mb-4"></p>
+
+    <form id="settings-edit-form" method="post" data-async-submit class="space-y-3">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      {# Some endpoints expect a `key_name` form field (set by JS for
+         api_keys endpoints, ignored by settings_kv endpoints). #}
+      <input type="hidden" id="settings-edit-key-name" name="key_name" value="">
+
+      {# Slot — JS populates with one or more form rows per service.
+         Each row uses .form-input styling for visual consistency.
+         Password fields use .input-group with a hold-to-reveal eye that
+         hits the existing /admin/settings/api-keys/<svc>/reveal endpoint. #}
+      <div id="settings-edit-fields" class="space-y-3">
+        {# Populated by JS — falls through to a placeholder if the controller
+           hasn't loaded yet (e.g., no-JS edge case). #}
+        <p class="text-sm text-slate-500 italic">
+          (Loading fields&hellip;)
+        </p>
+      </div>
+
+      <div class="flex justify-end gap-2 pt-2">
+        <button type="button" data-modal-close
+                class="px-3 py-2 text-sm rounded-md border border-surface-200 hover:bg-surface-50 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1">
+          Cancel
+        </button>
+        <button type="submit"
+                class="px-3 py-2 text-sm rounded-md bg-brand-500 text-white hover:bg-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1">
+          Save
+        </button>
+      </div>
+    </form>
+  </div>
+</div>

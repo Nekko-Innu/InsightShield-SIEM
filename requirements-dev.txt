@@ -1,0 +1,4 @@
+# Dev-only extras — not needed in production (systemd unit doesn't run tests).
+-r requirements.txt
+pytest
+pytest-playwright

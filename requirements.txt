@@ -1,0 +1,11 @@
+flask
+flask-login
+python-dotenv
+groq
+google-genai
+requests
+apscheduler
+textstat
+gunicorn
+cryptography>=42.0  # Fernet encryption for api_keys table (Round 3)
+playwright>=1.45    # Headless Chromium for /report.pdf export (Round G §18)

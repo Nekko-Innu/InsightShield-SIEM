@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  {# Per-session CSRF token, readable by any script on the page. static/ui.js
+     sends it as X-CSRF-Token on the client-error beacon; before this, that
+     POST carried no token and the blanket check in web/csrf.py would reject
+     it. #}
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <title>{% block title %}Insight Shield{% endblock %}</title>
+
+  {# Vendored Tailwind. This was the Play CDN with an onerror handler that
+     document.write()'d the local copy on failure — which meant the CDN could
+     serve whatever it liked into an admin console, and the CSP had to allow
+     it. The vendored file was already sitting in static/vendor/ as the
+     fallback; it is just the source now. See static/vendor/VERSIONS.md. #}
+  <script src="{{ url_for('static', filename='vendor/tailwindcss-3.4.3.min.js') }}"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='design-tokens.css') }}">
+  {# Round G follow-up: report-specific Bureau body + Marker print
+     stylesheet, conditionally loaded only on /report and /report.pdf
+     so the rest of the dashboard isn't shipped ~250 lines of
+     report-only CSS. See docs/security-audit-report.md and
+     static/report-bureau.css for the full treatment. #}
+  {% if request.endpoint in ('reports.report', 'reports.report_pdf') %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='report-bureau.css') }}">
+  {% endif %}
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50:  'var(--brand-50)',  100: 'var(--brand-100)', 200: 'var(--brand-200)',
+              300: 'var(--brand-300)', 400: 'var(--brand-400)', 500: 'var(--brand-500)',
+              600: 'var(--brand-600)', 700: 'var(--brand-700)', 800: 'var(--brand-800)',
+              900: 'var(--brand-900)',
+            },
+            surface: {
+              0:   'var(--surface-0)',   50:  'var(--surface-50)',
+              100: 'var(--surface-100)', 200: 'var(--surface-200)',
+              300: 'var(--surface-300)', 700: 'var(--surface-700)',
+              900: 'var(--surface-900)',
+            },
+          },
+          fontFamily: {
+            {# Self-hosted IBM Plex Sans (static/fonts/, @font-face in
+               design-tokens.css) — adopted from the typeui.sh "Enterprise"
+               preset. System stack kept as the fallback chain. #}
+            sans: ['IBM Plex Sans', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['ui-monospace', 'SF Mono', 'Cascadia Code', 'Consolas', 'monospace'],
+          },
+          boxShadow: {
+            card: 'var(--shadow-md)',
+            pop:  'var(--shadow-lg)',
+          },
+        },
+      },
+    };
+  </script>
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="min-h-screen bg-surface-50 text-slate-900 font-sans"
+      data-authed="{{ 1 if current_user and current_user.is_authenticated else 0 }}">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  {% if current_user and current_user.is_authenticated %}
+  {# UI rework Round B: header collapsed into icon row + cog dropdown menu.
+     IT_ADMIN: clickable logo · Report · Export CSV · Cog (Settings/Pwd/Sign-out) · Role badge
+     Manager:  clickable logo · Report ·            · Cog (Pwd/Sign-out)        · Role badge
+     The cog dropdown is JS-driven (data-menu-toggle / data-menu-panel hooks
+     in static/ui.js); falls back to no-op without JS. #}
+  {% from "_icon.html" import icon %}
+  <header class="bg-white border-b border-surface-200 shadow-sm">
+    <div class="max-w-[var(--content-max-width)] mx-auto px-6 py-3 flex items-center justify-between">
+      <a href="{{ url_for('dashboards.dashboard') }}"
+         class="flex items-center gap-3 focus:outline-none rounded-md hover:bg-surface-50 px-1 -mx-1 py-1 -my-1">
+        <div class="w-9 h-9 rounded-lg bg-brand-500 flex items-center justify-center text-white"
+             aria-hidden="true">
+          {# Heroicon: shield-check — same SVG used on login.html for visual continuity. #}
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke-width="1.8"
+               stroke="currentColor" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6
+                 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623
+                 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152
+                 c-3.196 0-6.1-1.248-8.25-3.285z"/>
+          </svg>
+        </div>
+        <div class="text-left">
+          <div class="font-semibold text-slate-900 leading-tight">Insight Shield</div>
+          <div class="text-xs text-slate-500 leading-tight">
+            {{ 'IT Admin' if current_user.is_it_admin else 'Manager' }}
+          </div>
+        </div>
+      </a>
+
+      <nav aria-label="Primary" class="flex items-center gap-2">
+        <a href="{{ url_for('reports.report') }}"
+           title="Security Audit Report"
+           aria-label="Security Audit Report"
+           class="p-2 rounded-md border border-surface-200 hover:bg-surface-50 focus:outline-none">
+          {{ icon("document-text", "w-4 h-4") }}
+        </a>
+
+        {% if current_user.is_it_admin %}
+        <a href="{{ url_for('reports.export_csv') }}"
+           title="Export alerts to CSV"
+           aria-label="Export alerts to CSV"
+           class="p-2 rounded-md border border-surface-200 hover:bg-surface-50 focus:outline-none">
+          {{ icon("arrow-down-tray", "w-4 h-4") }}
+        </a>
+        {% endif %}
+
+        <div class="relative" data-menu-root>
+          <button type="button"
+                  data-menu-toggle
+                  aria-expanded="false"
+                  aria-haspopup="true"
+                  aria-label="Account menu"
+                  class="p-2 rounded-md border border-surface-200 hover:bg-surface-50 focus:outline-none">
+            {{ icon("cog-6-tooth", "w-4 h-4") }}
+          </button>
+          <div data-menu-panel
+               role="menu"
+               hidden
+               class="absolute right-0 mt-1.5 w-52 bg-white rounded-lg shadow-lg border border-surface-200 py-1 z-30">
+            {% if current_user.is_it_admin %}
+            <a href="{{ url_for('admin_settings.admin_settings') }}"
+               role="menuitem"
+               class="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-surface-50 focus:outline-none">
+              {{ icon("cog-6-tooth", "w-4 h-4") }}
+              <span>Settings</span>
+            </a>
+            {% endif %}
+            <a href="{{ url_for('auth.change_password') }}"
+               role="menuitem"
+               class="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-surface-50 focus:outline-none">
+              {{ icon("lock-closed", "w-4 h-4") }}
+              <span>Change password</span>
+            </a>
+            <div class="border-t border-surface-200 my-1" role="separator"></div>
+            <form method="post" action="{{ url_for('auth.logout') }}">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <button type="submit"
+                      role="menuitem"
+                      class="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-surface-50 focus:outline-none text-left">
+                {{ icon("arrow-right-on-rectangle", "w-4 h-4") }}
+                <span>Sign out</span>
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <span class="badge {% if current_user.is_it_admin %}badge-info{% else %}badge-low{% endif %}">
+          {{ current_user.role_display }}
+        </span>
+      </nav>
+    </div>
+  </header>
+  {% endif %}
+
+  <main id="main" class="max-w-[var(--content-max-width)] mx-auto px-6 py-6 {% block main_class %}{% endblock %}">
+    {% if not suppress_flash_seed %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div id="flash-seed" class="hidden" aria-hidden="true">
+          {% for category, msg in messages %}
+            <span data-category="{{ category }}">{{ msg }}</span>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <div class="toast-region" id="toast-region" role="region" aria-live="polite" aria-label="Notifications"></div>
+
+  <footer class="max-w-[var(--content-max-width)] mx-auto px-6 py-6 text-xs text-slate-500 flex justify-between">
+    <span>Build 0.4.1</span>
+    <span>Insight Shield v1.4.1 &middot; DLSL-IT Cybersecurity Capstone</span>
+  </footer>
+
+  <script src="{{ url_for('static', filename='ui.js', v=build_time or '1') }}" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

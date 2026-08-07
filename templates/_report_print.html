@@ -1,0 +1,102 @@
+{# templates/_report_print.html
+   Round G §18 stage G2 — security audit report cover + TOC partial.
+
+   Included once by templates/report.html when ?generated=1. The
+   `sections` list below is the single source of truth: the TOC
+   iterates it, and the body in report.html uses literal section IDs
+   that match each entry's "id". Drift would show up in G2.3's
+   grep-loop verification gate (every TOC href has a matching id).
+
+   Cover and TOC each occupy their own page in print/PDF via the
+   `.report-cover` and `.report-toc` classes (page-break-after:always
+   added in static/design-tokens.css by stage G2's print-rules commit).
+
+   Renders for both screen AND print. On screen the cover is a tall
+   hero card with a navy --brand-500 accent bar; on print/PDF it fills
+   page 1, the TOC fills page 2, and the body sections flow from
+   page 3 onwards with @media print's `h2 { page-break-before: always }`
+   already in design-tokens.css since Round 7.
+#}
+{% set sections = [
+  {"id": "executive-summary", "label": "Executive Summary"},
+  {"id": "methodology-scope", "label": "Methodology & Scope"},
+  {"id": "summary-metrics",   "label": "Summary Metrics"},
+  {"id": "detect-csf",        "label": "NIST CSF 2.0 — Detect"},
+  {"id": "alert-details",     "label": "Alert Details"},
+  {"id": "appendix-raw",      "label": "Appendix A — Raw Wazuh JSON"}
+] %}
+
+{# ── Cover page (Marker treatment) ───────────────────────────────────
+   Round G follow-up. Replaces the earlier modest hero card with the
+   typographic "Security / Audit / Report." Marker layout from the
+   reference doc. The on-screen view shows it as a card; @media print
+   in static/report-bureau.css overrides padding/border/box-shadow
+   and uses the cover-internal grid + giant 96pt title.
+
+   The data-report-id attribute powers the per-page footer counter
+   via attr() in the @page bottom-left rule, so every page of the
+   PDF carries the same report ID. #}
+{% set _report_id = "IS-AR-" ~ (date_to | replace("-", "")) ~ "-001" %}
+<section class="report-cover bg-white rounded-xl shadow-card border border-surface-200 mb-6 overflow-hidden"
+         data-report-id="{{ _report_id }}">
+  <div class="rb-cover" style="padding: 28px 36px;">
+    <div class="rb-cover__brand">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="name">Insight Shield</span>
+      <span class="id">{{ _report_id }}</span>
+    </div>
+
+    <div class="rb-cover__eyebrow">
+      <span class="marker">REPORT · 01</span>
+      <span>Security · Detection · Audit</span>
+    </div>
+
+    <h1 class="rb-cover__title">
+      Security<br>Audit<br><em>Report.</em>
+    </h1>
+
+    <p class="rb-cover__lede">
+      Detection coverage and operational follow-through across
+      {% if summary and summary.total %}
+        <strong>{{ summary.total }}</strong> detections recorded by Wazuh sensors
+      {% else %}
+        the events recorded by Wazuh sensors
+      {% endif %}
+      during the {{ date_from }} &mdash; {{ date_to }} reporting window.
+      NIST CSF 2.0 alignment: <strong>Detect</strong> (scope of this audit). Other
+      CSF 2.0 functions are out-of-scope per the project thesis.
+    </p>
+
+    <dl class="rb-cover__meta">
+      <div>
+        <dt>Reporting period</dt>
+        <dd>{{ date_from }} &mdash; {{ date_to }}</dd>
+      </div>
+      <div>
+        <dt>Issued</dt>
+        <dd>{{ generated_at | forensic_ts }}</dd>
+      </div>
+      <div>
+        <dt>Prepared by</dt>
+        <dd>{{ user.username }} · {{ user.role }}</dd>
+      </div>
+      <div>
+        <dt>Framework</dt>
+        <dd>NIST CSF 2.0 · Detect</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+{# ── Table of Contents ────────────────────────────────────────────── #}
+<section class="report-toc bg-white rounded-xl shadow-card border border-surface-200 p-8 mb-6">
+  <h2 class="text-2xl font-bold text-slate-900 mb-4">Table of Contents</h2>
+  <ol class="report-toc__list space-y-2 text-base list-decimal list-inside marker:text-slate-400">
+    {% for s in sections %}
+    <li>
+      <a href="#{{ s.id }}"
+         class="text-brand-700 hover:text-brand-800 hover:underline">{{ s.label }}</a>
+    </li>
+    {% endfor %}
+  </ol>
+</section>

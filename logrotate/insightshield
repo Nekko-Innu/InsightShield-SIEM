@@ -1,0 +1,24 @@
+# /etc/logrotate.d/insightshield — installed by scripts/install.sh §6
+#
+# Covers ONLY gunicorn's two files. Everything else already rotates:
+#   - logs/insightshield.log   app.py uses RotatingFileHandler (5 MB x 5)
+#   - /var/log/nginx/*.log     the distro ships /etc/logrotate.d/nginx
+#
+# ponytail: copytruncate, not a postrotate signal. gunicorn holds both fds open
+# for the life of the worker, so a plain rename orphans them and the files stop
+# growing while the disk keeps filling. copytruncate costs a tiny window in
+# which one line can be lost; the alternative is `systemctl kill -s USR1`, and
+# with workers = 1 (see gunicorn.conf.py) a mishandled reopen takes the only
+# worker — and every open SSE stream — down with it. Revisit if a lost access
+# log line ever matters more than a dropped request.
+
+/var/log/insightshield/access.log /var/log/insightshield/error.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su insightshield insightshield
+}

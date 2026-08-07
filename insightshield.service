@@ -1,0 +1,50 @@
+# insightshield.service
+# Insight Shield — systemd Service Unit
+# Install to: /etc/systemd/system/insightshield.service on VM-03
+#
+# Setup:
+#   sudo cp insightshield.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable insightshield
+#   sudo systemctl start insightshield
+#   sudo systemctl status insightshield
+
+[Unit]
+Description=Insight Shield SIEM Dashboard (gunicorn)
+After=network.target wazuh-manager.service
+Wants=wazuh-manager.service
+
+[Service]
+Type=simple
+User=insightshield
+Group=insightshield
+WorkingDirectory=/opt/insightshield/insightshield
+Environment="PATH=/opt/insightshield/venv/bin:/usr/bin"
+# ProtectHome=true below masks /home, so Playwright's default
+# ~/.cache/ms-playwright is invisible to this unit and /report.pdf dies with
+# "Executable doesn't exist". Install the browser to this path instead —
+# ReadWritePaths=/opt/insightshield already covers it. scripts/install.sh does.
+Environment="PLAYWRIGHT_BROWSERS_PATH=/opt/insightshield/ms-playwright"
+ExecStart=/opt/insightshield/venv/bin/gunicorn -c /opt/insightshield/insightshield/gunicorn.conf.py app:app
+Restart=always
+RestartSec=5
+
+# ── Hardening ────────────────────────────────────────────────────────────────
+# Narrow the blast radius of a compromise of the Flask app.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# App must be able to write its SQLite DB, WAL/SHM sidecars, and log files.
+ReadWritePaths=/opt/insightshield /var/log/insightshield
+# Network access required (AI APIs + SMS + Telegram + Gmail SMTP)
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

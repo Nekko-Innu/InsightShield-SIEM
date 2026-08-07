@@ -1,0 +1,81 @@
+{% extends "_base.html" %}
+{% from "_icon.html" import icon %}
+{% block title %}Settings · Insight Shield{% endblock %}
+
+{% block head_extra %}
+{# Prism is needed because the Audit Log tab includes audit.html which uses
+   it for the JSON detail column. Light theme here — the detail column sits
+   on a light surface, unlike alert_detail's dark <pre>. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/prism-1.29.0.min.css') }}">
+{% endblock %}
+
+{% block content %}
+{# Round 3 — Settings admin console. Vertical tab layout: left sidebar lists
+   three tabs (Service Configuration, Audit Log, Backups); right pane swaps
+   based on the ?tab= querystring. Active tab is determined server-side so
+   the URL is shareable / deep-linkable. #}
+
+{% set active_tab = (request.args.get('tab') or 'service').lower() %}
+{% if active_tab not in ('service', 'audit', 'backups', 'errors') %}
+  {% set active_tab = 'service' %}
+{% endif %}
+
+<a href="{{ url_for('dashboards.dashboard') }}"
+   role="button"
+   class="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-md
+          border border-surface-200 bg-white text-slate-700
+          hover:bg-surface-50 hover:text-brand-700
+          focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1
+          transition-colors mb-4">
+  {{ icon("arrow-left", "w-4 h-4") }}
+  <span>Back to Dashboard</span>
+</a>
+
+<h1 class="text-2xl font-semibold text-slate-900 mb-1">Settings</h1>
+<p class="text-sm text-slate-500 mb-6">
+  Manage external-service credentials, view the audit log, and configure backups.
+</p>
+
+<div class="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-6">
+  {# Left sidebar — vertical tabs #}
+  <nav class="flex md:flex-col gap-1" aria-label="Settings sections">
+    {% set tabs = [
+      ('service',  'Service Configuration'),
+      ('audit',    'Audit Log'),
+      ('backups',  'Backups'),
+      ('errors',   'Errors'),
+    ] %}
+    {% for key, label in tabs %}
+    <a href="{{ url_for('admin_settings.admin_settings', tab=key) }}"
+       class="px-3 py-2 text-sm rounded-md
+              {% if active_tab == key %}bg-brand-50 text-brand-800 font-semibold border-l-4 border-brand-500{% else %}text-slate-600 hover:bg-surface-50{% endif %}">
+      {{ label }}
+    </a>
+    {% endfor %}
+  </nav>
+
+  {# Right pane — content for the active tab #}
+  <div class="min-w-0">
+    {# No `ignore missing`: these four partials are the only content each tab
+       has, so a rename would render an empty pane that looks like a tab with
+       nothing in it. Without it, TemplateNotFound hits the error handler and
+       says so. #}
+    {% if active_tab == 'audit' %}
+      {% include "audit.html" %}
+    {% elif active_tab == 'backups' %}
+      {% include "backups.html" %}
+    {% elif active_tab == 'errors' %}
+      {% include "errors.html" %}
+    {% else %}
+      {% include "_settings_service_config.html" %}
+    {% endif %}
+  </div>
+</div>
+
+{# Hidden CSRF token — settings.js reads this for the reveal endpoint. #}
+<input type="hidden" id="csrf-token" value="{{ csrf_token() }}">
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/settings.js') }}" defer></script>
+{% endblock %}

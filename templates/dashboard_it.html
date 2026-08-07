@@ -1,0 +1,288 @@
+{% extends "_base.html" %}
+{% block title %}IT Admin Console · Insight Shield{% endblock %}
+
+{% block head_extra %}
+{# Chart.js removed 2026-04-23 — severity donut replaced by a custom
+   horizontal bar chart rendered in static/ui.js. No CDN needed. #}
+{% endblock %}
+
+{% block content %}
+<h1 class="sr-only">IT Admin Console</h1>
+
+<!-- Toolbar — UI rework Round C: Status/Severity dropdowns + Hide-low toggle.
+     The legacy sim-only filter is dropped per Round-1 sim removal.
+     Export CSV + Security Audit Report links removed from this toolbar in
+     Round C since Round B added them as icon buttons in the header.
+
+     Now a GET form. The old version filtered in the browser with
+     row.hidden over whatever 50 rows happened to be rendered, so an alert
+     past row 50 could not be reached by any control on this page. The
+     server does the filtering; the URL carries the state, which also makes
+     a filtered view linkable and survives the SSE fallback's reload. -->
+<form method="get" action="{{ url_for('dashboards.dashboard_it') }}" id="alert-filters">
+  {# Changing any filter goes back to page 1 — page 7 of an unfiltered list
+     is rarely page 7 of a filtered one. #}
+  <input type="hidden" name="page" value="1">
+<section class="bg-white rounded-xl shadow-card border border-surface-200 p-4 mb-4
+                flex flex-col md:flex-row md:items-center gap-3 justify-between min-w-0">
+  <div class="flex flex-wrap items-center gap-3">
+    <div class="flex items-center gap-2">
+      <label for="status-filter" class="text-sm text-slate-600">Status:</label>
+      <select id="status-filter" name="status"
+              class="rounded-md border border-surface-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none">
+        <option value="">All alerts</option>
+        <option value="open"   {% if filters.status == 'open' %}selected{% endif %}>Open only</option>
+        <option value="closed" {% if filters.status == 'closed' %}selected{% endif %}>Closed only</option>
+      </select>
+    </div>
+    <div class="flex items-center gap-2">
+      <label for="sev-filter" class="text-sm text-slate-600">Severity:</label>
+      <select id="sev-filter" name="severity"
+              class="rounded-md border border-surface-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none">
+        <option value="">All severities</option>
+        {% for sev in ['INFORMATIONAL', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] %}
+        <option value="{{ sev }}" {% if filters.severity == sev %}selected{% endif %}>{{ sev|capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {# A real checkbox, styled with peer-checked: — the button it replaced
+       needed eight classList.toggle calls in ui.js to fake this state. #}
+    <label class="inline-flex items-center cursor-pointer">
+      <input type="checkbox" id="hide-low-toggle" name="hide_low" value="1"
+             {% if filters.hide_low %}checked{% endif %}
+             class="peer sr-only">
+      <span class="px-3 py-1.5 rounded-md text-sm border border-surface-200 bg-white text-slate-700
+                   hover:bg-surface-50 peer-checked:bg-brand-600 peer-checked:text-white
+                   peer-checked:border-brand-600 peer-checked:hover:bg-brand-700
+                   peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500">
+        Hide low severity
+      </span>
+    </label>
+  </div>
+  <div class="flex flex-wrap items-center gap-2 justify-end">
+    <label for="search" class="sr-only">Search alerts</label>
+    {# Enter submits — no keystroke listener, no debounce to tune. #}
+    <input id="search" name="q" type="search" placeholder="Search alerts…"
+           value="{{ filters.q }}"
+           class="rounded-md border border-surface-300 px-3 py-2 text-sm w-48 md:w-56 focus:border-brand-500 focus:outline-none">
+    <button type="submit" class="px-3 py-2 rounded-md text-sm border border-surface-200 bg-white text-slate-700 hover:bg-surface-50">
+      Filter
+    </button>
+    {% if pager.filtered %}
+    <a href="{{ url_for('dashboards.dashboard_it') }}"
+       class="px-3 py-2 rounded-md text-sm text-slate-600 hover:text-slate-900 underline">Clear</a>
+    {% endif %}
+  </div>
+</section>
+</form>
+
+<!-- KPI strip -->
+{# Round D follow-up: kpis tuple gains a 4th element `value_color`. When
+   present (currently only the Active Agents tile uses it via
+   kpi.agents_color), the value renders with an inline color so the X/Y
+   ratio reads the same threshold-coded palette as the manager dashboard.
+   tabular-nums keeps digit columns from jiggling as counts change.
+   Round J: SMS credits tile removed (SMS channel retired) — fixed
+   4-column layout. #}
+<section class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+  {% set kpis = [
+    ('Open alerts',   kpi.open|default(0),         'slate', None),
+    ('24h MTTA',      kpi.mtta|default('—'),       'slate', None),
+    ('Active agents', kpi.agents|default('0/0'),   'green', kpi.agents_color),
+    ((primary_provider_label|default('Groq')) ~ ' used', kpi.groq|default('0%'), 'brand', None),
+  ] %}
+  {% for label, value, tone, value_color in kpis %}
+  <div class="bg-white rounded-lg shadow-sm border border-surface-200 p-3">
+    <div class="text-xs text-slate-500">{{ label }}</div>
+    <div class="text-xl font-semibold mt-1 tabular-nums{% if not value_color %} text-slate-900{% endif %}"
+         {%- if value_color %} style="color: {{ value_color }};"{% endif %}>{{ value }}</div>
+  </div>
+  {% endfor %}
+</section>
+
+<div class="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-4">
+  <!-- Main table -->
+  {# Round D §16: defensive min-w-0 on the left grid child. Currently
+     latent because the inner `<div class="overflow-x-auto table-scroll">`
+     gives the table its own scroll context, but the same grid pattern as
+     alert_detail.html — preventive fix per the "any other page" rule so
+     a future content addition can't push the 320px aside off-screen. #}
+  <section aria-labelledby="table-title" class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden min-w-0">
+    <h2 id="table-title" class="sr-only">Alerts table</h2>
+    {# UI rework Round-C tweak: cap the alerts table at 420px (.table-scroll
+       from design-tokens.css). The existing <thead class="sticky top-0">
+       now meaningfully pins to the wrapper's top instead of the viewport,
+       so column headers stay visible while the user scrolls a long list.
+       overflow-x-auto stays for narrow viewports — different axis, no
+       conflict with .table-scroll's overflow-y. #}
+    <div class="overflow-x-auto table-scroll">
+      <table class="w-full text-sm table-fixed">
+        {# Round F follow-up: Actions column dropped — the whole row is now
+           clickable (event-delegated handler in static/ui.js) and lands on
+           /alert/<id>. Widths redistributed: 9/11/13/13/14/30/10 = 100% —
+           Rule (14%) given a wider track to fit "100030 — FIM: Bulk file rename
+           burst (ransomware indicator)" without ellipsis on a 1440px viewport;
+           Status compacted to 10% since "Open" / "IT acked" / "Resolved" are
+           short, predictable strings. Sev nudged to 9% so the (N/M)
+           escalation badge has breathing room next to the MID pill. #}
+        <colgroup>
+          <col style="width:9%">   <!-- Sev -->
+          <col style="width:11%">  <!-- Time -->
+          <col style="width:13%">  <!-- Device -->
+          <col style="width:13%">  <!-- Attacker IP -->
+          <col style="width:14%">   <!-- Rule -->
+          <col style="width:30%">  <!-- Description -->
+          <col style="width:10%">  <!-- Status -->
+        </colgroup>
+        <thead class="bg-surface-50 sticky top-0 text-left text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th scope="col" class="px-3 py-2">Sev</th>
+            <th scope="col" class="px-3 py-2">Time</th>
+            <th scope="col" class="px-3 py-2">Device</th>
+            <th scope="col" class="px-3 py-2">Attacker IP</th>
+            <th scope="col" class="px-3 py-2">Rule</th>
+            <th scope="col" class="px-3 py-2">Description</th>
+            <th scope="col" class="px-3 py-2">Status</th>
+          </tr>
+        </thead>
+        {# data-filtered tells dashboard-it-realtime.js that a live alert may
+           not belong on this view, so it offers a reload chip instead of
+           prepending a row that ignores the active filter. data-per-page
+           keeps "Showing 1–50 of N" honest when it does prepend. #}
+        <tbody class="divide-y divide-surface-100" id="alerts-tbody"
+               data-filtered="{{ '1' if pager.filtered else '0' }}"
+               data-per-page="{{ pager.per_page }}">
+          {% for a in alerts %}
+            {# Round 4: row markup extracted to _alert_row.html so the SSE
+               producer (wazuh_receiver.process_alert) can render the
+               same partial server-side and pump the HTML into the
+               new_alert event. Single source of truth. #}
+            {% include "_alert_row.html" %}
+          {% else %}
+          <tr><td colspan="7" class="px-3 py-8 text-center text-slate-500">No alerts.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {# Outside the .table-scroll div deliberately: that wrapper is capped at
+       420px, so a pager inside it would scroll out of reach on a full page. #}
+    {% include "_pager.html" %}
+  </section>
+
+  <!-- Side panel: severity bar chart + audit log -->
+  <aside class="space-y-4">
+    <section class="bg-white rounded-xl shadow-card border border-surface-200 p-4">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+          <svg class="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round"
+               stroke-linejoin="round" aria-hidden="true">
+            <line x1="6"  y1="20" x2="6"  y2="16"/>
+            <line x1="12" y1="20" x2="12" y2="10"/>
+            <line x1="18" y1="20" x2="18" y2="4"/>
+          </svg>
+          Severity · today
+        </h2>
+        <div class="flex gap-1 text-[10px] font-medium" role="group" aria-label="Time range">
+          <button type="button" data-range="24h"
+                  class="range-btn px-3 py-1 rounded-full bg-teal-600 text-white">24h</button>
+          <button type="button" data-range="7d"
+                  class="range-btn px-3 py-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200">7d</button>
+          <button type="button" data-range="30d"
+                  class="range-btn px-3 py-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200">30d</button>
+        </div>
+      </div>
+      {# Round 6: row order reversed to crit -> info per master spec §6
+         (Critical at top, Informational at bottom). Added a `.dot` next
+         to each label so this chart shares the visual vocabulary of
+         Round 5's status indicators — single colored-circle convention
+         across login, dashboards, and chart.
+         Round F follow-up: labels uppercased (CRIT/HIGH/MID/LOW/INFO) so
+         the chart matches the dense table-row vocabulary in _alert_row.html
+         (CRIT/HI/MID/LOW/INFO). The chart has 40px of label width — wider
+         than the 7%-of-table Sev column — so HIGH fits where the table
+         row uses HI. Single visual vocabulary across both surfaces. #}
+      <div class="space-y-2" id="sev-bars" aria-label="Severity breakdown">
+        {% for key, label, tone in [
+            ('crit','CRIT','crit'), ('high','HIGH','high'),
+            ('med','MID','med'), ('low','LOW','low'), ('info','INFO','info')
+        ] %}
+        <div class="flex items-center gap-2 text-xs">
+          <span class="dot dot--sm flex-shrink-0"
+                style="background-color: var(--sev-{{ tone }}-border);"
+                aria-hidden="true"></span>
+          <span class="w-10 text-slate-500 font-medium">{{ label }}</span>
+          <div class="flex-1 h-6 bg-slate-100 rounded-md overflow-hidden">
+            <div class="h-full rounded-md transition-all duration-300"
+                 data-sev="{{ key }}"
+                 style="width:0%; background: var(--sev-{{ tone }}-border);"></div>
+          </div>
+          <span class="w-7 text-right font-mono text-sm font-semibold tabular-nums text-slate-700"
+                id="count-{{ key }}">0</span>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="mt-3 text-[11px] text-slate-400 flex items-center justify-end gap-1">
+        <span>Total alerts: <span id="sev-total">0</span></span>
+      </div>
+    </section>
+    {# UI rework Round C: Agents card. Reads the existing `agents` template
+       variable already passed by dashboards.dashboard_it (via get_agent_status).
+       Uses .agents-scroll utility from Round A so the list scrolls when the
+       fleet grows past ~10 hosts. Dot color tracks Wazuh status: 'active'
+       maps to --status-online; everything else (disconnected, never_connected,
+       pending, unknown) maps to --status-offline. #}
+    <section class="bg-white rounded-xl shadow-card border border-surface-200 p-4">
+      <h2 class="text-sm font-medium text-slate-500 mb-2">Agents</h2>
+      <div class="agents-scroll">
+        <ul class="space-y-2 text-sm">
+          {% for ag in agents | default([]) %}
+          <li class="flex items-center gap-2 text-xs">
+            <span class="dot dot--sm flex-shrink-0"
+                  style="background-color: {{ 'var(--status-online)' if (ag.status or '')|lower == 'active' else 'var(--status-offline)' }};"
+                  aria-hidden="true"></span>
+            <span class="font-mono flex-1 truncate">{{ ag.name|default('?') }}</span>
+            <span class="text-slate-400">{{ ag.status|default('unknown') }}</span>
+          </li>
+          {% else %}
+          <li class="text-xs text-slate-400">No agent data available.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </section>
+    <section class="bg-white rounded-xl shadow-card border border-surface-200 p-4">
+      <h2 class="text-sm font-medium text-slate-500 mb-2">Audit log</h2>
+      {# UI rework Round-C tweak: replaced inline max-h-72 overflow-auto
+         with .agents-scroll utility for consistency with the Agents card
+         above; same scroll behaviour, single source of truth in
+         design-tokens.css. #}
+      <ul class="space-y-2 text-sm agents-scroll">
+        {% for e in audit_log|default([]) %}
+        <li class="flex gap-2">
+          <time datetime="{{ e.ts }}" data-humanize title="{{ e.ts | forensic_ts }}" class="text-xs text-slate-500 shrink-0 w-16">{{ e.ts }}</time>
+          <span class="text-slate-700">{{ e.actor }} · {{ e.action }}</span>
+        </li>
+        {% else %}
+        <li class="text-xs text-slate-500">No recent activity.</li>
+        {% endfor %}
+      </ul>
+    </section>
+  </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{# Severity chart controller moved to static/ui.js. The toolbar filter
+   controller also lives there; both are gated on #alert-filters /
+   #sev-bars existence so other pages are unaffected. #}
+
+{# Round 4: SSE real-time updates. sse.js exposes window.InsightShieldSSE;
+   dashboard-it-realtime.js instantiates it and wires the consumers
+   (alert table prepend on new_alert, severity bars refresh on
+   severity_update). Gated by current_user.is_it_admin so we
+   don't ship the realtime module to manager dashboard or other pages. #}
+{% if current_user.is_it_admin %}
+<script src="{{ url_for('static', filename='js/sse.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/dashboard-it-realtime.js') }}" defer></script>
+{% endif %}
+{% endblock %}

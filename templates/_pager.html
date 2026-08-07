@@ -1,0 +1,41 @@
+{# templates/_pager.html
+   Prev/Next pager for the IT alerts table.
+
+   Caller must provide `pager` (built in web/blueprints/dashboards.py's
+   dashboard_it): page, last_page,
+   total, per_page, first_row, last_row. Links are built with the url_with()
+   Jinja global so paging keeps whatever filters are already applied.
+
+   No numbered page links: with a Next that carries the filters and a table
+   that is read newest-first, jumping to page 9 is not a thing anyone does —
+   they narrow the filter instead.
+
+   Included AFTER </table> and outside the .table-scroll wrapper, which is
+   capped at 420px; a pager inside it would scroll away from the user. #}
+<div class="flex items-center justify-between gap-3 px-4 py-3 border-t border-surface-200 bg-surface-50 text-sm">
+  <p class="text-slate-600" id="pager-summary">
+    {% if pager.total %}
+      Showing {{ pager.first_row }}–{{ pager.last_row }} of {{ pager.total }}
+    {% else %}
+      No matching alerts
+    {% endif %}
+  </p>
+  <div class="flex items-center gap-2">
+    {% if pager.page > 1 %}
+      <a href="{{ url_with(page=pager.page - 1) }}" rel="prev"
+         class="px-3 py-1.5 rounded-md border border-surface-200 bg-white text-slate-700 hover:bg-surface-100">Prev</a>
+    {% else %}
+      {# A disabled anchor is not a thing; a span is. #}
+      <span aria-disabled="true"
+            class="px-3 py-1.5 rounded-md border border-surface-200 bg-surface-100 text-slate-400 cursor-not-allowed">Prev</span>
+    {% endif %}
+    <span class="text-slate-500 tabular-nums">Page {{ pager.page }} of {{ pager.last_page }}</span>
+    {% if pager.page < pager.last_page %}
+      <a href="{{ url_with(page=pager.page + 1) }}" rel="next"
+         class="px-3 py-1.5 rounded-md border border-surface-200 bg-white text-slate-700 hover:bg-surface-100">Next</a>
+    {% else %}
+      <span aria-disabled="true"
+            class="px-3 py-1.5 rounded-md border border-surface-200 bg-surface-100 text-slate-400 cursor-not-allowed">Next</span>
+    {% endif %}
+  </div>
+</div>

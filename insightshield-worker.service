@@ -1,0 +1,61 @@
+# insightshield-worker.service
+# Insight Shield — scheduled jobs (APScheduler)
+# Install to: /etc/systemd/system/insightshield-worker.service on VM-03
+#
+# Setup:
+#   sudo cp insightshield-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable insightshield-worker
+#   sudo systemctl start insightshield-worker
+#   journalctl -u insightshield-worker -f
+#
+# Owns the escalation sweep, the 30s Wazuh agent poll, the 02:00 database
+# backup and the 03:00 retention purge. EXACTLY ONE INSTANCE MAY RUN — this
+# unit is why insightshield.service can now run 3 gunicorn workers without
+# taking 3 concurrent backups of the same SQLite file every night.
+#
+# Deliberately NOT tied to insightshield.service with After= or PartOf=. They
+# share only the database. A crash in one must not take down the other: the
+# dashboard staying up while the poller restarts is the whole point of
+# splitting them, and the login page reports a dead poller on its own (a
+# snapshot older than agent_status.STALE_AFTER_S reads red rather than stale).
+
+[Unit]
+Description=Insight Shield scheduled jobs (APScheduler)
+After=network.target wazuh-manager.service
+Wants=wazuh-manager.service
+
+[Service]
+Type=simple
+User=insightshield
+Group=insightshield
+# Load-bearing, not cosmetic: db.py resolves the SQLite path and config.py
+# resolves .env against the process CWD. Start this anywhere else and the
+# worker quietly creates its own empty database beside itself.
+WorkingDirectory=/opt/insightshield/insightshield
+Environment="PATH=/opt/insightshield/venv/bin:/usr/bin"
+# No PLAYWRIGHT_BROWSERS_PATH here — nothing on a schedule renders a PDF.
+ExecStart=/opt/insightshield/venv/bin/python /opt/insightshield/insightshield/worker.py
+Restart=always
+RestartSec=5
+
+# ── Hardening ────────────────────────────────────────────────────────────────
+# Same profile as the web unit; this process holds the same credentials.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# Writes the SQLite DB (agent-status snapshot, retention purge), its WAL/SHM
+# sidecars, the nightly backup, and log files.
+ReadWritePaths=/opt/insightshield /var/log/insightshield
+# Network access required (Wazuh API + Telegram + Gmail SMTP for escalation)
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

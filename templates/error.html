@@ -1,0 +1,51 @@
+{# Shared error page for 403 / 404 / 500.
+
+   Replaces the previous handlers, which returned `redirect(...), 404` — a
+   Location header carrying a non-redirect status. Browsers do not follow that,
+   so the navigation silently never happened and the queued flash message
+   surfaced later on an unrelated page ("That page doesn't exist." appearing at
+   login). One template, three callers; the handler passes code/title/message.
+
+   Renders for anonymous users too: _base.html:66 guards the whole nav behind
+   current_user.is_authenticated, so a 404 hit while logged out is safe.
+#}
+{% extends "_base.html" %}
+{% from "_icon.html" import icon %}
+{% block title %}{{ code }} · Insight Shield{% endblock %}
+
+{% block content %}
+<div class="min-h-[60vh] grid place-items-center">
+  <section aria-labelledby="err-title"
+           class="w-full max-w-lg bg-white rounded-xl shadow-card border border-surface-200 p-8 text-center">
+    <p class="text-5xl font-semibold tracking-tight text-slate-300 mb-2">{{ code }}</p>
+    <h1 id="err-title" class="text-xl font-semibold text-slate-900 mb-2">{{ title }}</h1>
+    <p class="text-sm text-slate-500 mb-6">{{ message }}</p>
+
+    {% if current_user and current_user.is_authenticated %}
+      {# Role-aware: an IT admin hitting a 404 used to be sent to the manager
+         dashboard, because every error target was hardcoded to it. #}
+      <a href="{{ url_for('dashboards.dashboard') }}"
+         role="button"
+         class="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-md
+                border border-surface-200 bg-white text-slate-700
+                hover:bg-surface-50 hover:text-brand-700
+                focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1
+                transition-colors">
+        {{ icon("arrow-left", "w-4 h-4") }}
+        <span>Back to Dashboard</span>
+      </a>
+    {% else %}
+      <a href="{{ url_for('auth.login') }}"
+         role="button"
+         class="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-md
+                border border-surface-200 bg-white text-slate-700
+                hover:bg-surface-50 hover:text-brand-700
+                focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1
+                transition-colors">
+        {{ icon("arrow-right-on-rectangle", "w-4 h-4") }}
+        <span>Sign in</span>
+      </a>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

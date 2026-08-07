@@ -1,0 +1,318 @@
+# web/blueprints/auth.py
+# Login, logout, password rotation, and the login throttle that backs them.
+#
+# The throttle counts LOGIN_FAILURE rows via db.failed_logins_in_window, so it
+# has always been correct across multiple workers — the in-memory bucket the
+# gunicorn config used to warn about is rate_limit's AI-provider limiter, a
+# different thing entirely.
+
+import json
+import logging
+from datetime import datetime, timedelta
+
+from flask import (
+    Blueprint, flash, make_response, redirect, render_template, request, url_for,
+)
+from flask_login import current_user, login_required, login_user, logout_user
+
+import alert_router
+import config
+import db
+from web.auth_user import User
+from web.filters import humanize_seconds
+from web.responses import redirect_to_dashboard
+
+logger = logging.getLogger("insightshield.web.auth")
+
+bp = Blueprint("auth", __name__)
+
+
+# ── Login throttle (Round E §11.1a) ─────────────────────────────────────────
+# Reads audit_log via db.failed_logins_in_window(); no new dependencies, no
+# new schema. Two thresholds — per-IP and per-username — block independently
+# so an attacker can't bypass either by rotating the other. The 20-in-60-min
+# escalation threshold (separate code path) emits a credential_brute_force
+# HIGH alert via alert_router; see §11.1c.
+_THROTTLE_IP_LIMIT      = 5    # LOGIN_FAILURE per IP within window before 429
+_THROTTLE_IP_WINDOW_MIN = 15
+_THROTTLE_USER_LIMIT      = 10  # LOGIN_FAILURE per username within window
+_THROTTLE_USER_WINDOW_MIN = 60
+# §11.1c — escalation threshold. At >=N failures per IP per window, emit a
+# `credential_brute_force` HIGH alert via alert_router. Idempotent: at most
+# one alert per IP per window via the audit_log target check.
+_THROTTLE_ESCALATE_LIMIT      = 20
+_THROTTLE_ESCALATE_WINDOW_MIN = 60
+
+def _check_login_throttle(ip: str | None, username: str | None) -> int | None:
+    """Return retry-after seconds if the login should be blocked; else None.
+
+    Per-IP fires first (catches the common case of a single attacker host),
+    falling through to per-username (catches IP-rotated attacks against one
+    account). Returning the WINDOW length as retry-after is conservative —
+    the actual quiet time is shorter (oldest failure rolls out of the
+    window earlier), but precision isn't worth the SQL overhead here.
+    """
+    if ip:
+        ip_failures = db.failed_logins_in_window(
+            ip=ip, since_minutes=_THROTTLE_IP_WINDOW_MIN
+        )
+        if ip_failures >= _THROTTLE_IP_LIMIT:
+            return _THROTTLE_IP_WINDOW_MIN * 60
+    if username:
+        user_failures = db.failed_logins_in_window(
+            username=username, since_minutes=_THROTTLE_USER_WINDOW_MIN
+        )
+        if user_failures >= _THROTTLE_USER_LIMIT:
+            return _THROTTLE_USER_WINDOW_MIN * 60
+    return None
+
+def _maybe_dispatch_brute_force_alert(ip: str | None, count: int) -> None:
+    """Emit a credential_brute_force HIGH alert if not already emitted for
+    this IP within the escalation window. Idempotent — repeated failures
+    past the threshold won't re-dispatch (would otherwise spam Telegram/SMS).
+
+    Round E (§11.1c). Reuses alert_router.route_alert so every notification
+    channel (IT SMS + Telegram + Email + Manager Telegram for HIGH severity)
+    fires without new code paths.
+    """
+    if not ip:
+        return
+    target = f"credential_brute_force:{ip}"
+    cutoff = (
+        datetime.now(tz=config.PHT)
+        - timedelta(minutes=_THROTTLE_ESCALATE_WINDOW_MIN)
+    ).isoformat()
+    # Idempotency check: any prior dispatch for this IP within the window.
+    try:
+        conn = db._get_conn()
+        prior = conn.execute(
+            "SELECT 1 FROM audit_log "
+            "WHERE action = 'ALERT_DISPATCHED' AND target = ? AND ts > ? LIMIT 1",
+            (target, cutoff),
+        ).fetchone()
+        if prior:
+            return  # already dispatched within window — don't re-fire
+    except Exception as e:
+        logger.warning("brute-force idempotency check failed: %s", e)
+        # Fall through and dispatch — better to occasionally double-dispatch
+        # than to silently drop a real escalation alert
+    plain_text = (
+        f"Repeated failed logins from {ip}: {count} attempts in "
+        f"{_THROTTLE_ESCALATE_WINDOW_MIN} min. Possible credential brute force."
+    )
+    raw_alert = json.dumps({
+        "rule": {"id": "ISH-CBF-001", "level": 11,
+                 "description": "Credential brute force (Insight Shield internal)"},
+        "agent": {"ip": ip, "name": "insightshield"},
+        "data": {"srcip": ip, "count": count,
+                 "window_min": _THROTTLE_ESCALATE_WINDOW_MIN},
+        "full_log": plain_text,
+        "timestamp": datetime.now(tz=config.PHT).isoformat(),
+    }, ensure_ascii=False)
+    alert_dict = {
+        "timestamp":     datetime.now(tz=config.PHT).isoformat(),
+        "rule_id":       "ISH-CBF-001",
+        "attack_type":   "credential_brute_force",
+        "severity":      "HIGH",
+        "device_name":   ip,
+        "raw_alert":     raw_alert,
+        "plain_text":    plain_text,
+        "ai_reasoning":  "Internal — generated by Insight Shield login throttle",
+        "provider_used": "internal",
+        "fk_grade":      None,
+        "attack_trail":  raw_alert,
+    }
+    try:
+        alert_id = db.store_alert(alert_dict)
+        alert_dict["id"] = alert_id
+        alert_router.route_alert("HIGH", alert_dict)
+        db.log_audit(
+            action="ALERT_DISPATCHED",
+            actor="system",
+            target=target,
+            ip=ip,
+            details=f"alert_id={alert_id} count={count}",
+        )
+        logger.warning(
+            "credential_brute_force alert dispatched: ip=%s count=%d alert_id=%d",
+            ip, count, alert_id,
+        )
+    except Exception as e:
+        logger.error("Failed to dispatch credential_brute_force alert: %s", e)
+
+# ── Routes ───────────────────────────────────────────────────────────────────
+
+@bp.route("/")
+def index():
+    return redirect(url_for("auth.login"))
+
+@bp.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        return redirect_to_dashboard()
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+
+        # Round E (§11.1a) — throttle pre-check. Runs before verify_password so
+        # bcrypt cost isn't paid for blocked actors; flash uses the new
+        # 'throttle' category so login.html can render it with a clock icon.
+        retry_after = _check_login_throttle(request.remote_addr, username)
+        if retry_after is not None:
+            flash(
+                f"Too many attempts. Try again in {humanize_seconds(retry_after)}.",
+                "throttle",
+            )
+            logger.warning(
+                "Login throttle trip: ip=%s username=%s retry_after=%ds",
+                request.remote_addr, username, retry_after,
+            )
+            db.log_audit(
+                action="LOGIN_THROTTLED",
+                actor=username or "anonymous",
+                ip=request.remote_addr,
+                user_agent=request.headers.get("User-Agent", ""),
+                details=f"retry_after_s={retry_after}",
+            )
+            resp = make_response(
+                render_template("login.html", known_devices=config.KNOWN_DEVICES),
+                429,
+            )
+            resp.headers["Retry-After"] = str(retry_after)
+            return resp
+
+        user_data = db.verify_password(username, password)
+        if user_data:
+            user = User(
+                username,
+                user_data["role"],
+                must_change_password=user_data.get("must_change_password", 0),
+                password_hash=user_data.get("password_hash"),
+            )
+            # Drop any pre-auth CSRF token so one minted for an anonymous
+            # visitor cannot survive into the authenticated session, and mark
+            # the session permanent so PERMANENT_SESSION_LIFETIME (30 min)
+            # actually applies — without this Flask issues a browser-session
+            # cookie and the configured idle timeout is dead config.
+            from flask import session
+
+            session.pop("csrf_token", None)
+            session.permanent = True
+            login_user(user, remember=True)
+            logger.info("User logged in: %s (role=%s)", username, user_data["role"])
+            db.log_audit(
+                action="LOGIN_SUCCESS",
+                actor=username,
+                actor_role=user_data["role"],
+                ip=request.remote_addr,
+                user_agent=request.headers.get("User-Agent", ""),
+            )
+            if user.must_change_password:
+                flash("You must change your password before continuing.", "warning")
+                return redirect(url_for("auth.change_password"))
+            return redirect_to_dashboard()
+        else:
+            flash("Invalid credentials. Please try again.", "error")
+            logger.warning("Failed login attempt: username=%s", username)
+            db.log_audit(
+                action="LOGIN_FAILURE",
+                actor=username or "anonymous",
+                actor_role=None,
+                ip=request.remote_addr,
+                user_agent=request.headers.get("User-Agent", ""),
+            )
+            # Round E (§11.1c) — escalation. Re-count INCLUDING the failure
+            # we just logged; if it crosses the threshold, dispatch a HIGH
+            # credential_brute_force alert (idempotent within the window).
+            escalation_count = db.failed_logins_in_window(
+                ip=request.remote_addr,
+                since_minutes=_THROTTLE_ESCALATE_WINDOW_MIN,
+            )
+            if escalation_count >= _THROTTLE_ESCALATE_LIMIT:
+                _maybe_dispatch_brute_force_alert(
+                    request.remote_addr, escalation_count
+                )
+
+    return render_template("login.html", known_devices=config.KNOWN_DEVICES)
+
+# POST only. Accepting GET made this a one-click forced logout — any <img src>
+# or link on a hostile page could end an IT admin's session mid-incident.
+# _base.html:138 already submits this as a POST form.
+@bp.route("/logout", methods=["POST"])
+@login_required
+def logout():
+    logger.info("User logged out: %s", current_user.username)
+    db.log_audit(
+        action="LOGOUT",
+        actor=current_user.username,
+        actor_role=current_user.role,
+        ip=request.remote_addr,
+        user_agent=request.headers.get("User-Agent", ""),
+    )
+    logout_user()
+    # logout_user() drops the Flask-Login keys but leaves the rest of the
+    # session (including the CSRF token) intact. Clear it so nothing survives
+    # the boundary between two users on a shared machine.
+    from flask import session
+
+    session.clear()
+    return redirect(url_for("auth.login"))
+
+@bp.route("/account/password", methods=["GET", "POST"], endpoint="change_password")
+@login_required
+def change_password():
+    """
+    Let the logged-in user rotate their own password. Requires the current
+    password, a new password entered twice (min 10 chars), and clears the
+    must_change_password flag on success.
+    """
+    if request.method == "POST":
+        current_pw = request.form.get("current_password", "")
+        new_pw     = request.form.get("new_password", "")
+        confirm_pw = request.form.get("confirm_password", "")
+
+        if db.verify_password(current_user.username, current_pw) is None:
+            flash("Current password is incorrect.", "error")
+            return render_template("password_change.html")
+
+        if len(new_pw) < 10:
+            flash("New password must be at least 10 characters.", "error")
+            return render_template("password_change.html")
+
+        if new_pw != confirm_pw:
+            flash("New password and confirmation do not match.", "error")
+            return render_template("password_change.html")
+
+        if new_pw == current_pw:
+            flash("New password must be different from the current password.", "error")
+            return render_template("password_change.html")
+
+        if db.set_password(current_user.username, new_pw):
+            flash("Password changed successfully.", "success")
+            logger.info("Password changed for user: %s", current_user.username)
+            db.log_audit(
+                action="PASSWORD_CHANGED",
+                actor=current_user.username,
+                actor_role=current_user.role,
+                target=f"user:{current_user.username}",
+                ip=request.remote_addr,
+            )
+            # Changing the password changes the password-derived session token,
+            # which by design invalidates every session for this account —
+            # including the one making this request. Re-issue it so the user who
+            # just rotated their own password stays logged in while every OTHER
+            # session (and any stolen remember cookie) is killed.
+            changed = db.get_user(current_user.username)
+            refreshed = User(
+                changed["username"],
+                changed["role"],
+                must_change_password=changed.get("must_change_password", 0),
+                password_hash=changed.get("password_hash"),
+            )
+            login_user(refreshed, remember=True)
+            return redirect_to_dashboard()
+
+        flash("Could not change password — contact IT.", "error")
+
+    return render_template("password_change.html")

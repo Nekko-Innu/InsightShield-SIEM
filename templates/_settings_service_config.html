@@ -1,0 +1,474 @@
+{# Round 3 — Service Configuration sub-sections.
+   Included by settings.html when ?tab=service. Six cards, one per
+   external-service category (SMS Gateway/Semaphore card removed Round J).
+
+   Round F redesign (§17): 4 of 6 cards (Telegram x2, Gmail, Wazuh)
+   moved to the new layout — status row + masked summary + actions row +
+   Edit modal. The two unchanged cards are AI Providers (richer toggle
+   exists already; out of scope per §17.4) and Notification Recipients
+   (no service to test or toggle; just pointers). Encrypted credential
+   storage and the existing per-service POST endpoints are unchanged —
+   the new Edit modal posts to those same routes.
+#}
+{% from "_icon.html" import icon %}
+
+{% macro masked_value(plaintext) %}
+  {%- if plaintext and plaintext|length >= 4 -%}
+    {{ '•' * 8 }}{{ plaintext[-4:] }}
+  {%- elif plaintext -%}
+    {{ '•' * 8 }}
+  {%- else -%}
+  {%- endif -%}
+{% endmacro %}
+
+{% macro encrypted_field(service, key_name, label, plaintext, hint='') %}
+<div class="grid grid-cols-1 md:grid-cols-[180px_1fr_auto_auto] gap-2 items-center">
+  <label for="fld-{{ service }}-{{ key_name }}" class="text-sm font-medium text-slate-700">{{ label }}</label>
+  <input type="password"
+         id="fld-{{ service }}-{{ key_name }}"
+         name="plaintext"
+         data-service="{{ service }}"
+         data-key-name="{{ key_name }}"
+         placeholder="{% if plaintext %}{{ masked_value(plaintext) }}{% else %}— not set —{% endif %}"
+         class="rounded-md border border-surface-300 px-3 py-2 text-sm font-mono focus:border-brand-500 focus:outline-none">
+  <button type="button"
+          class="btn-reveal inline-flex items-center justify-center w-9 h-9 rounded-md border border-surface-200 hover:bg-surface-50"
+          {% if not plaintext %}disabled{% endif %}
+          title="{% if plaintext %}Reveal current value (10s){% else %}Nothing to reveal{% endif %}">
+    {{ icon("eye", "w-4 h-4 text-slate-500") }}
+  </button>
+  <button type="submit"
+          class="px-3 py-2 text-sm rounded-md bg-brand-500 text-white hover:bg-brand-600">
+    Save
+  </button>
+</div>
+{% if hint %}<p class="text-xs text-slate-500 mt-1">{{ hint }}</p>{% endif %}
+{% endmacro %}
+
+{% macro plain_field(setting_key, label, value, placeholder='', hint='') %}
+<form method="post" action="{{ url_for('admin_settings.admin_settings_set_setting', key=setting_key) }}">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <div class="grid grid-cols-1 md:grid-cols-[180px_1fr_auto] gap-2 items-center">
+    <label for="fld-{{ setting_key }}" class="text-sm font-medium text-slate-700">{{ label }}</label>
+    <input type="text"
+           id="fld-{{ setting_key }}"
+           name="value"
+           value="{{ value or '' }}"
+           placeholder="{{ placeholder }}"
+           class="rounded-md border border-surface-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none">
+    <button type="submit"
+            class="px-3 py-2 text-sm rounded-md bg-brand-500 text-white hover:bg-brand-600">
+      Save
+    </button>
+  </div>
+  {% if hint %}<p class="text-xs text-slate-500 mt-1">{{ hint }}</p>{% endif %}
+</form>
+{% endmacro %}
+
+{# Round F §17 — service_card macro.
+   Renders one of the 5 redesigned cards (SMS / Telegram x2 / Gmail / Wazuh).
+   Drops the inline forms (modal-only per Q5) and replaces them with:
+     - status row (dot + label) reading from service_status
+     - masked summary line listing each field's masked-or-empty value
+     - actions row: optional Active/Deactivated toggle (3 services) +
+       Edit button (opens modal) + Test button (AJAX probe)
+
+   `summary_pairs` is a list of (label, value) tuples; missing values
+   render as "— not set —" so the card always shows the schema even when
+   empty. `fields` is an array of dicts that the F5 JS reads from the
+   <script> island below to populate the Edit modal. #}
+{% macro service_card(svc_key, label, subtitle, summary_pairs, fields, toggle_allowed=False, test_allowed=True) %}
+{% set status = service_status.get(svc_key, 'offline') %}
+{% set is_active = service_active.get(svc_key, True) %}
+{% set status_token = 'online' if status == 'online' else 'offline' %}
+<section class="service-card bg-white rounded-xl shadow-card border border-surface-200 p-5 mb-4"
+         data-service-card="{{ svc_key }}">
+  <div class="flex items-start justify-between gap-4">
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-wrap items-center gap-2 mb-1">
+        <h2 class="text-lg font-semibold text-slate-900">{{ label }}</h2>
+        <span class="status-row">
+          <span class="dot dot--sm" data-status-dot
+                style="background-color: var(--status-{{ status_token }});"
+                aria-hidden="true"></span>
+          <span class="status-label" data-status-label
+                style="color: var(--status-{{ status_token }});">{{ status | upper }}</span>
+        </span>
+        <span class="test-result" data-test-result hidden></span>
+      </div>
+      <p class="text-sm text-slate-500 mb-2">{{ subtitle }}</p>
+      <p class="text-xs text-slate-600 font-mono break-all">
+        {%- for pair_label, pair_value in summary_pairs -%}
+          {%- if not loop.first %} <span class="text-slate-300">·</span> {% endif -%}
+          <span class="text-slate-500">{{ pair_label }}:</span>
+          <strong>{{ pair_value or '— not set —' }}</strong>
+        {%- endfor -%}
+      </p>
+    </div>
+    <div class="flex flex-col items-end gap-2 shrink-0">
+      {% if toggle_allowed %}
+      <form method="post" action="{{ url_for('admin_settings.admin_settings_toggle_service', service=svc_key) }}"
+            data-async-submit class="inline">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit"
+                class="toggle-btn toggle-btn--{{ 'active' if is_active else 'inactive' }}"
+                data-toggle-svc="{{ svc_key }}">
+          {{ 'Active' if is_active else 'Deactivated' }}
+        </button>
+      </form>
+      {% endif %}
+      <div class="flex gap-1">
+        <button type="button"
+                class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-surface-200 hover:bg-surface-50 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1"
+                data-service-edit="{{ svc_key }}"
+                title="Edit credentials">
+          {{ icon("pencil", "w-3.5 h-3.5") }}<span>Edit</span>
+        </button>
+        {% if test_allowed %}
+        <button type="button"
+                class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md bg-brand-500 text-white hover:bg-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1"
+                data-service-test="{{ svc_key }}"
+                title="Run live probe">
+          <span data-test-icon>Test</span>
+        </button>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>
+{# JSON island for the Edit modal. F5 JS reads this on Edit click. #}
+<script id="service-edit-config-{{ svc_key }}" type="application/json">{{ {
+  "service": svc_key,
+  "label": label,
+  "subtitle": subtitle,
+  "fields": fields,
+} | tojson }}</script>
+{% endmacro %}
+
+{# ─────────── 1. AI Providers ─────────── #}
+<section class="bg-white rounded-xl shadow-card border border-surface-200 p-6 mb-4">
+  {# Round F follow-up: header is now flex with title on the left and a
+     colored "+ Add Provider" CTA on the right. The CTA opens a modal
+     (markup below the providers list) instead of a <details> disclosure
+     so adding a provider doesn't require scrolling past the existing
+     list. wpOpenModal global from static/ui.js handles open/focus. #}
+  <header class="flex items-start justify-between gap-4 mb-3">
+    <div class="min-w-0">
+      <h2 class="text-lg font-semibold text-slate-900">AI Providers</h2>
+      <p class="text-sm text-slate-500">
+        Translation chain order. Active providers are tried top-to-bottom; the
+        first successful response wins. Failures fall through to the next provider.
+      </p>
+    </div>
+    <button type="button"
+            onclick="wpOpenModal('ai-provider-add-modal')"
+            class="shrink-0 inline-flex items-center gap-1 px-3 py-2 text-sm font-semibold rounded-md bg-brand-500 text-white hover:bg-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1">
+      <span aria-hidden="true">+</span>
+      <span>Add Provider</span>
+    </button>
+  </header>
+
+  {% if providers %}
+  <ul class="divide-y divide-surface-100 mb-4">
+    {% for p in providers %}
+    <li class="py-3 grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto_auto] gap-2 items-center">
+      <div>
+        <div class="font-medium text-slate-900">
+          {{ p.label }}
+          <span class="text-xs text-slate-500 font-normal">{{ p.model }}</span>
+          {% if not p.is_active %}<span class="badge badge-info">inactive</span>{% endif %}
+        </div>
+        <div class="text-xs text-slate-500 font-mono">{{ p.base_url }}</div>
+      </div>
+      {# Reorder #}
+      <form method="post" action="{{ url_for('admin_settings.admin_settings_provider_move', provider_id=p.id) }}" class="inline">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="direction" value="up">
+        <button type="submit" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-surface-200 hover:bg-surface-50" title="Move up">
+          {{ icon("chevron-up", "w-4 h-4 text-slate-500") }}
+        </button>
+      </form>
+      <form method="post" action="{{ url_for('admin_settings.admin_settings_provider_move', provider_id=p.id) }}" class="inline">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="direction" value="down">
+        <button type="submit" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-surface-200 hover:bg-surface-50" title="Move down">
+          {{ icon("chevron-down", "w-4 h-4 text-slate-500") }}
+        </button>
+      </form>
+      {# Toggle active #}
+      <form method="post" action="{{ url_for('admin_settings.admin_settings_provider_toggle', provider_id=p.id) }}" class="inline">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit" class="px-2 py-1 text-xs rounded-md border border-surface-200 hover:bg-surface-50">
+          {% if p.is_active %}Deactivate{% else %}Activate{% endif %}
+        </button>
+      </form>
+      {# Delete #}
+      <form method="post" action="{{ url_for('admin_settings.admin_settings_provider_delete', provider_id=p.id) }}" class="inline" onsubmit="return confirm('Delete provider ' + {{ p.label | tojson }} + '?')">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50" title="Delete provider">
+          {{ icon("trash", "w-4 h-4") }}
+        </button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-sm text-slate-500 italic mb-4">No providers configured. Add one below.</p>
+  {% endif %}
+
+  {# JSON island — settings.js reads PROVIDER_TEMPLATES for the dropdown handler. #}
+  <script id="provider-templates-json" type="application/json">{{ provider_templates_json|safe }}</script>
+</section>
+
+{# Round F follow-up: Add Provider modal. Triggered by the colored CTA in
+   the AI Providers header above. Uses the same wpOpenModal pattern as
+   the alert-detail ack/resolve modals; data-modal-close on Cancel
+   closes via the global handler in static/ui.js. #}
+<div id="ai-provider-add-modal" hidden role="dialog" aria-modal="true"
+     aria-labelledby="ai-provider-add-modal-title"
+     class="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+  <div class="bg-white rounded-xl shadow-pop border border-surface-200 p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+    <h3 id="ai-provider-add-modal-title"
+        class="text-lg font-semibold text-slate-900 mb-1">Add AI Provider</h3>
+    <p class="text-sm text-slate-500 mb-4">
+      Pick a vendor template to auto-fill the static fields, then supply your
+      label and API key. The new provider is appended to the end of the chain.
+    </p>
+    <form method="post" action="{{ url_for('admin_settings.admin_settings_provider_add') }}"
+          class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">Template</label>
+        <select id="provider-template-select"
+                class="w-full rounded-md border border-surface-300 px-3 py-2 text-sm">
+          <option value="">— pick a vendor —</option>
+          {% for tname in provider_templates.keys() %}
+          <option value="{{ tname }}">{{ tname }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">Label</label>
+        <input type="text" name="label" required class="w-full rounded-md border border-surface-300 px-3 py-2 text-sm">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">Model</label>
+        <input type="text" name="model" required class="w-full rounded-md border border-surface-300 px-3 py-2 text-sm" placeholder="e.g. llama-3.1-8b-instant">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">API Key</label>
+        <input type="password" name="api_key" required class="w-full rounded-md border border-surface-300 px-3 py-2 text-sm font-mono">
+      </div>
+      <div class="md:col-span-2">
+        <label class="block text-xs font-medium text-slate-600 mb-1">Base URL</label>
+        <input type="text" name="base_url" required class="w-full rounded-md border border-surface-300 px-3 py-2 text-sm font-mono">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">Auth Header</label>
+        <input type="text" name="auth_header" required class="w-full rounded-md border border-surface-300 px-3 py-2 text-sm font-mono" placeholder="Authorization">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">Auth Prefix</label>
+        <input type="text" name="auth_prefix" class="w-full rounded-md border border-surface-300 px-3 py-2 text-sm font-mono" placeholder="Bearer ">
+      </div>
+      <div class="md:col-span-2">
+        <label class="block text-xs font-medium text-slate-600 mb-1">Request Format</label>
+        <select name="request_format" class="w-full rounded-md border border-surface-300 px-3 py-2 text-sm">
+          <option value="openai_compat">OpenAI-compatible (Groq, OpenAI, DeepSeek, OpenRouter, ...)</option>
+          <option value="gemini_v1beta">Gemini v1beta (google-genai SDK)</option>
+          <option value="anthropic_messages">Anthropic Messages (stub — Round 3 follow-up)</option>
+        </select>
+      </div>
+      <div class="md:col-span-2 flex justify-end gap-2 pt-2 border-t border-surface-100 mt-2">
+        <button type="button" data-modal-close
+                class="px-3 py-2 text-sm rounded-md border border-surface-200 hover:bg-surface-50 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1">
+          Cancel
+        </button>
+        <button type="submit"
+                class="px-4 py-2 text-sm font-semibold rounded-md bg-brand-500 text-white hover:bg-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1">
+          Add Provider
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ─────────── 2. Telegram — IT Group — Round F redesign ─────────── #}
+{{ service_card(
+    svc_key='telegram_it',
+    label='Telegram — IT Group',
+    subtitle='Receives every MEDIUM+ alert.',
+    summary_pairs=[
+      ('Bot token', masked_value(api_keys.get(('telegram_it','BOT_TOKEN'))) | string | trim),
+      ('Chat ID', settings_kv.get('telegram_it_chat_id')),
+    ],
+    fields=[
+      {
+        "name": "plaintext", "label": "Bot token", "type": "password",
+        "endpoint": url_for('admin_settings.admin_settings_set_api_key', service='telegram_it'),
+        "extra": {"key_name": "BOT_TOKEN"},
+        "current_set": api_keys.get(('telegram_it','BOT_TOKEN')) is not none,
+        "reveal_endpoint": url_for('admin_settings.admin_settings_reveal_api_key', service='telegram_it'),
+        "hint": "From @BotFather. Format: 123456:ABC-DEF..."
+      },
+      {
+        "name": "value", "label": "Chat ID", "type": "text",
+        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='telegram_it_chat_id'),
+        "extra": {},
+        "current_value": settings_kv.get('telegram_it_chat_id') or '',
+        "placeholder": "-100xxxxxxxxxx",
+        "hint": "Negative for groups, positive for direct messages."
+      },
+    ],
+    toggle_allowed=true
+) }}
+
+{# ─────────── 3. Telegram — Manager — Round F redesign ─────────── #}
+{{ service_card(
+    svc_key='telegram_manager',
+    label='Telegram — Manager',
+    subtitle='Receives HIGH/CRITICAL + resolution notices only.',
+    summary_pairs=[
+      ('Bot token', masked_value(api_keys.get(('telegram_manager','BOT_TOKEN'))) | string | trim),
+      ('Chat ID', settings_kv.get('telegram_manager_chat_id')),
+    ],
+    fields=[
+      {
+        "name": "plaintext", "label": "Bot token", "type": "password",
+        "endpoint": url_for('admin_settings.admin_settings_set_api_key', service='telegram_manager'),
+        "extra": {"key_name": "BOT_TOKEN"},
+        "current_set": api_keys.get(('telegram_manager','BOT_TOKEN')) is not none,
+        "reveal_endpoint": url_for('admin_settings.admin_settings_reveal_api_key', service='telegram_manager'),
+        "hint": ""
+      },
+      {
+        "name": "value", "label": "Chat ID", "type": "text",
+        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='telegram_manager_chat_id'),
+        "extra": {},
+        "current_value": settings_kv.get('telegram_manager_chat_id') or '',
+        "placeholder": "",
+        "hint": ""
+      },
+    ],
+    toggle_allowed=true
+) }}
+
+{# ─────────── 4. Gmail SMTP — Round F redesign ─────────── #}
+{{ service_card(
+    svc_key='gmail',
+    label='Gmail SMTP',
+    subtitle="HIGH/CRITICAL alerts to the IT admin's email. Use a Google App Password.",
+    summary_pairs=[
+      ('From', settings_kv.get('gmail_address')),
+      ('App password', masked_value(api_keys.get(('gmail','APP_PASSWORD'))) | string | trim),
+    ],
+    fields=[
+      {
+        "name": "value", "label": "From address", "type": "text",
+        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='gmail_address'),
+        "extra": {},
+        "current_value": settings_kv.get('gmail_address') or '',
+        "placeholder": "alerts@yourcompany.com",
+        "hint": ""
+      },
+      {
+        "name": "plaintext", "label": "App Password", "type": "password",
+        "endpoint": url_for('admin_settings.admin_settings_set_api_key', service='gmail'),
+        "extra": {"key_name": "APP_PASSWORD"},
+        "current_set": api_keys.get(('gmail','APP_PASSWORD')) is not none,
+        "reveal_endpoint": url_for('admin_settings.admin_settings_reveal_api_key', service='gmail'),
+        "hint": "Generate at myaccount.google.com → Security → 2FA → App passwords."
+      },
+    ],
+    toggle_allowed=false
+) }}
+
+{# ─────────── 5. Wazuh API — Round F redesign ─────────── #}
+{{ service_card(
+    svc_key='wazuh',
+    label='Wazuh API',
+    subtitle='Optional — dashboard falls back to a static device list if not configured.',
+    summary_pairs=[
+      ('URL', settings_kv.get('wazuh_api_url')),
+      ('User', settings_kv.get('wazuh_api_user')),
+      ('Password', masked_value(api_keys.get(('wazuh','PASSWORD'))) | string | trim),
+    ],
+    fields=[
+      {
+        "name": "value", "label": "API URL", "type": "text",
+        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='wazuh_api_url'),
+        "extra": {},
+        "current_value": settings_kv.get('wazuh_api_url') or '',
+        "placeholder": "https://127.0.0.1:55000",
+        "hint": ""
+      },
+      {
+        "name": "value", "label": "API user", "type": "text",
+        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='wazuh_api_user'),
+        "extra": {},
+        "current_value": settings_kv.get('wazuh_api_user') or '',
+        "placeholder": "wazuh-wui",
+        "hint": ""
+      },
+      {
+        "name": "plaintext", "label": "API password", "type": "password",
+        "endpoint": url_for('admin_settings.admin_settings_set_api_key', service='wazuh'),
+        "extra": {"key_name": "PASSWORD"},
+        "current_set": api_keys.get(('wazuh','PASSWORD')) is not none,
+        "reveal_endpoint": url_for('admin_settings.admin_settings_reveal_api_key', service='wazuh'),
+        "hint": ""
+      },
+    ],
+    toggle_allowed=false
+) }}
+
+{# ─────────── 6. Notification Recipients — Round F redesign ─────────── #}
+{# Pointers, not a service — there is no live probe to run, so the macro
+   is invoked with test_allowed=false to suppress the Test button. Status
+   dot reflects whether all 3 required recipient pointers are populated
+   (manager_phone, it_admin_phone, it_admin_email). Moved to the bottom
+   of the section list so the testable services (1-5) cluster together. #}
+{{ service_card(
+    svc_key='recipients',
+    label='Notification Recipients',
+    subtitle='Contact-record phone numbers only — SMS channel retired Round J, no longer read by any dispatch path.',
+    summary_pairs=[
+      ('Manager phone', settings_kv.get('manager_phone')),
+      ('IT admin phone', settings_kv.get('it_admin_phone')),
+      ('IT admin email', settings_kv.get('it_admin_email')),
+    ],
+    fields=[
+      {
+        "name": "value", "label": "Manager phone", "type": "text",
+        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='manager_phone'),
+        "extra": {},
+        "current_value": settings_kv.get('manager_phone') or '',
+        "placeholder": "+639XXXXXXXXX",
+        "hint": ""
+      },
+      {
+        "name": "value", "label": "IT admin phone", "type": "text",
+        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='it_admin_phone'),
+        "extra": {},
+        "current_value": settings_kv.get('it_admin_phone') or '',
+        "placeholder": "+639XXXXXXXXX",
+        "hint": "Contact record only — SMS channel retired Round J."
+      },
+      {
+        "name": "value", "label": "IT admin email", "type": "text",
+        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='it_admin_email'),
+        "extra": {},
+        "current_value": settings_kv.get('it_admin_email') or '',
+        "placeholder": "admin@yourcompany.com",
+        "hint": ""
+      },
+    ],
+    toggle_allowed=false,
+    test_allowed=false
+) }}
+
+{# Round F §17 — shared Edit modal. Single instance for the whole tab,
+   populated by JS based on which Edit button was clicked. The modal uses
+   the same wpOpenModal/wpCloseModal pattern as the alert-detail ack/resolve
+   modals; F5 (settings.js) wires the open/populate flow. #}
+{% include "_settings_edit_modal.html" %}
