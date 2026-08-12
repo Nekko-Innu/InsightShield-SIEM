@@ -199,7 +199,10 @@ def login():
 
             session.pop("csrf_token", None)
             session.permanent = True
-            login_user(user, remember=True)
+            # No remember=True: a remember cookie outlives the session and
+            # re-authenticates the moment PERMANENT_SESSION_LIFETIME expires,
+            # which made the 30-minute idle timeout unenforceable.
+            login_user(user)
             logger.info("User logged in: %s (role=%s)", username, user_data["role"])
             db.log_audit(
                 action="LOGIN_SUCCESS",
@@ -250,13 +253,23 @@ def logout():
         ip=request.remote_addr,
         user_agent=request.headers.get("User-Agent", ""),
     )
-    logout_user()
-    # logout_user() drops the Flask-Login keys but leaves the rest of the
-    # session (including the CSRF token) intact. Clear it so nothing survives
-    # the boundary between two users on a shared machine.
+    # Order is load-bearing. logout_user() drops the Flask-Login keys but leaves
+    # the rest of the session (including the CSRF token) intact, so the session
+    # still has to be cleared — nothing should survive the boundary between two
+    # users on a shared machine. It has to happen FIRST: logout_user() marks the
+    # remember cookie for deletion by writing session["_remember"] = "clear",
+    # which Flask-Login's after_request hook reads to expire the cookie. Clearing
+    # the session afterwards wiped that marker, the remember_token cookie was
+    # never expired, and the next request silently logged the user back in for
+    # the cookie's full 7-day life. logout_user() decides to set the marker from
+    # request.cookies, not from the session, so it is unaffected by the wipe.
+    # login_user() no longer passes remember=True, so there is no such cookie to
+    # clear today — the ordering stays because it is the correct one, and it is
+    # what keeps this safe if remember-me is ever switched back on.
     from flask import session
 
     session.clear()
+    logout_user()
     return redirect(url_for("auth.login"))
 
 @bp.route("/account/password", methods=["GET", "POST"], endpoint="change_password")
@@ -302,7 +315,7 @@ def change_password():
             # which by design invalidates every session for this account —
             # including the one making this request. Re-issue it so the user who
             # just rotated their own password stays logged in while every OTHER
-            # session (and any stolen remember cookie) is killed.
+            # session is killed.
             changed = db.get_user(current_user.username)
             refreshed = User(
                 changed["username"],
@@ -310,7 +323,7 @@ def change_password():
                 must_change_password=changed.get("must_change_password", 0),
                 password_hash=changed.get("password_hash"),
             )
-            login_user(refreshed, remember=True)
+            login_user(refreshed)
             return redirect_to_dashboard()
 
         flash("Could not change password — contact IT.", "error")

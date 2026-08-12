@@ -10,7 +10,8 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
-from flask import Flask
+from flask import Flask, request, session
+from flask.sessions import SecureCookieSessionInterface
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import config
@@ -51,8 +52,49 @@ logging.basicConfig(level=logging.INFO, handlers=[_file_handler, _stream_handler
 logger = logging.getLogger("insightshield.app")
 
 
+# Requests a browser makes on a timer, with no user behind them. Deliberately
+# NOT web.hooks.AUDIT_SKIP_PREFIXES, which is a longer list serving a different
+# question ("is this worth an audit row?"): it also holds
+# /api/severity-breakdown, which ui.js fetches from the dashboard's range-button
+# click handler as well as from the fallback poll. Borrowing that list would
+# have logged out an IT admin who spent half an hour doing nothing but clicking
+# range toggles. Anything not listed here counts as the user being present.
+_MACHINE_POLL_PREFIXES = (
+    "/api/alerts/latest",   # 15s watermark tick, both dashboards
+    "/api/events/stream",   # SSE, IT dashboard
+    "/api/status",          # 30s login-page status chip (unauthenticated)
+    "/health",              # gunicorn / nginx / systemd probe
+    "/static/",             # asset loads, including prefetch and cache revalidation
+)
+
+
+class _IdleTimeoutSessionInterface(SecureCookieSessionInterface):
+    """Machine polling must not count as user activity.
+
+    SESSION_REFRESH_EACH_REQUEST is on by default, so every authenticated
+    response re-issues the session cookie with a fresh 30 minutes. Both
+    dashboards poll themselves — /api/alerts/latest every 15s on the manager
+    side, /api/events/stream on the IT side — and both are @login_required, so
+    a browser left open on a dashboard renewed its own session forever and the
+    configured idle timeout fired for nobody who kept a tab open.
+
+    Skipping the refresh on those paths (and only when the session was not
+    modified, so a login or logout during one still writes its cookie) makes
+    the timeout measure what it claims to: time since the user last did
+    something.
+    """
+
+    def should_set_cookie(self, app, session):
+        if not session.modified and (request.path or "").startswith(
+            _MACHINE_POLL_PREFIXES
+        ):
+            return False
+        return super().should_set_cookie(app, session)
+
+
 def _configure(app: Flask) -> None:
     app.secret_key = config.FLASK_SECRET_KEY
+    app.session_interface = _IdleTimeoutSessionInterface()
 
     # nginx terminates TLS and proxies to 127.0.0.1:5000, so without this every
     # request looks like it came from loopback. That silently voided three controls:
@@ -72,12 +114,13 @@ def _configure(app: Flask) -> None:
         SESSION_COOKIE_SECURE=config.COOKIES_REQUIRE_HTTPS,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
-        REMEMBER_COOKIE_SECURE=config.COOKIES_REQUIRE_HTTPS,
-        REMEMBER_COOKIE_HTTPONLY=True,
-        REMEMBER_COOKIE_SAMESITE="Lax",
-        # login_user(remember=True) is unconditional at login; Flask-Login's default
-        # is 365 days, so a stolen cookie was good for a year.
-        REMEMBER_COOKIE_DURATION=timedelta(days=7),
+        # No REMEMBER_COOKIE_* settings: login_user() is called without
+        # remember=True, so no remember cookie is ever issued. It used to be,
+        # for 7 days, which outlived the 30-minute session and quietly logged
+        # the user back in the moment that session expired — the idle timeout
+        # could never end a login. Authentication now lives in the session
+        # cookie alone, which is the only thing PERMANENT_SESSION_LIFETIME
+        # governs.
     )
 
 
@@ -99,6 +142,22 @@ def create_app() -> Flask:
     """
     app = Flask(__name__)
     _configure(app)
+
+    # Registered FIRST, before anything that can touch current_user. Dropping
+    # remember=True stops new remember cookies but retires none of the ones
+    # already in browsers: Flask-Login still reads `remember_token` on every
+    # request, so a cookie minted by the previous build keeps authenticating —
+    # and re-minting 30-minute sessions — for its full 7 days after deploy,
+    # which is exactly the idle-timeout bypass this round removed. Verified
+    # against this build: a crafted legacy cookie reached /dashboard/it with
+    # HTTP 200. Setting session["_remember"] = "clear" both blocks the load
+    # (Flask-Login's remember branch checks that key) and makes its own
+    # after-request hook expire the cookie on the way out, so each affected
+    # browser is cleaned up on its next request.
+    @app.before_request
+    def _retire_legacy_remember_cookie():
+        if "remember_token" in request.cookies:
+            session["_remember"] = "clear"
 
     # ORDER IS LOAD-BEARING. Flask runs before_request functions in
     # registration order, and CSRF must precede the password-rotation gate and

@@ -967,6 +967,14 @@ def get_user(username: str) -> dict | None:
     return dict(row) if row else None
 
 
+# Hashed once at import, against a value nobody can ever type. verify_password
+# checks the submitted password against this when the username does not exist,
+# so both paths pay the same scrypt cost — without it, a missing username
+# returned in microseconds while a real one paid full hashing, and the response
+# time told an attacker which usernames exist.
+_DUMMY_PASSWORD_HASH = generate_password_hash("no-such-user-placeholder")
+
+
 def verify_password(username: str, password: str) -> dict | None:
     """
     Check a plaintext password against the stored hash.
@@ -974,6 +982,7 @@ def verify_password(username: str, password: str) -> dict | None:
     """
     user = get_user(username)
     if user is None:
+        check_password_hash(_DUMMY_PASSWORD_HASH, password)  # constant-time-ish
         return None
     try:
         ok = check_password_hash(user["password_hash"], password)

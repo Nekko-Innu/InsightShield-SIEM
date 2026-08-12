@@ -368,6 +368,13 @@
 </aside>{# /detail-right #}
 </div>{# /two-column grid — modals stay outside, they overlay the whole viewport #}
 
+{# Both modals are IT_ADMIN-only, like the buttons that open them (see above).
+   They used to render for everyone: a Manager saw no button, but their page
+   still carried the acknowledge and resolve forms, complete with a valid CSRF
+   token. @role_required refuses the POST either way, so this was never
+   exploitable — but it put IT-only workflow in a read-only observer's page,
+   which SYSTEM_DESIGN.md:40 says it should not have. #}
+{% if current_user.is_it_admin %}
 <!-- IT ACK confirmation modal -->
 <div id="it-ack-modal" hidden role="dialog" aria-modal="true" aria-labelledby="it-ack-modal-title"
      class="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
@@ -405,4 +412,5 @@
     </form>
   </div>
 </div>
+{% endif %}
 {% endblock %}

@@ -21,8 +21,7 @@ def session_token(password_hash: str | None) -> str:
     Short opaque token derived from the stored password hash.
 
     Embedded in the Flask-Login user id (see User.get_id) so that changing a
-    password invalidates every existing session and remember cookie for that
-    account. Deriving it from the hash means no schema change and no new column
+    password invalidates every existing session for that account. Deriving it from the hash means no schema change and no new column
     to keep in sync — the revocation event and the password change are the same
     event by construction.
 
@@ -43,14 +42,13 @@ class User(UserMixin):
 
     def get_id(self):
         """
-        Flask-Login stores this in the session and the remember cookie.
+        Flask-Login stores this in the session cookie.
 
-        It used to be the bare username, so a copied remember cookie stayed
-        valid for its full 7-day lifetime no matter what: logout_user() only
-        clears the cookie on the browser that called it, and changing the
-        password invalidated nothing. Appending the password-derived token
-        makes load_user reject any cookie minted before the last password
-        change.
+        It used to be the bare username, so a copied session stayed valid no
+        matter what: logging out ends the session on the browser that called
+        it, and changing the password invalidated nothing anywhere else.
+        Appending the password-derived token makes load_user reject any cookie
+        minted before the last password change.
         """
         return f"{self.username}:{self.session_token}"
 
@@ -106,7 +104,12 @@ def init_app(app) -> None:
     login_manager.init_app(app)
     login_manager.login_view = "auth.login"
     login_manager.login_message = "Please log in to access the dashboard."
-    # "strong" makes Flask-Login delete the session when the client identifier
-    # (IP + user agent) changes, rather than merely marking it non-fresh. Correct
-    # for a fixed retail branch; it would be disruptive for roaming mobile clients.
+    # "strong" is meant to delete the session when the client identifier (IP +
+    # user agent) changes, rather than merely marking it non-fresh. Note what it
+    # actually does here: Flask-Login 0.6.3's _session_protection_failed reads
+    # `if mode == "basic" or sess.permanent:` FIRST, and login sets
+    # session.permanent = True so PERMANENT_SESSION_LIFETIME applies — so a
+    # permanent session takes the basic branch (mark _fresh False, session
+    # survives) and never reaches the strong branch. Session revocation on this
+    # app rests on the password-derived token in User.get_id, not on this line.
     login_manager.session_protection = "strong"

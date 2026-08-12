@@ -518,6 +518,15 @@ Compare to the more restrictive routes:
 - `/dashboard/it` is `@role_required('IT_ADMIN')`
 - **`/report` is open to both** — deliberate
 
+**Content is not role-open, though (2026-08-13).** The route stays ungated; the template no longer
+is. Appendix A (raw Wazuh decoder payloads) and the per-alert Forensic detail block are wrapped in
+`{% if current_user.is_it_admin %}`, so a Manager's report — screen and PDF — carries the analysis
+without the raw payloads. Until this change `report.html` held no role check anywhere, and a Manager
+who clicked Generate received every raw payload in the range; the PDF was the worse artifact, since
+the renderer force-opens each `<details>` before printing. See ST-029 in
+[security-test-audit-2026-08-13.md](security-test-audit-2026-08-13.md). The two sentences pointing
+readers at Appendix A are gated with it, so a Manager's report has no dangling reference.
+
 ### 10.3 CSRF
 
 Neither route requires CSRF protection because both are GET-only. The Generate form at [report.html:47-71](../templates/report.html#L47-L71) submits via GET, which is correct semantically (the form doesn't change server state — it requests a new view).

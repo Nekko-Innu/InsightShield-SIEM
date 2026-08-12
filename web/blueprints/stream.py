@@ -9,6 +9,7 @@ from flask import Blueprint, Response, jsonify, render_template
 from flask_login import current_user, login_required
 
 import agent_status as agent_status_mod
+import config
 import db
 from alerts_util import build_severity_array, derive_attacker_ip
 from decorators import role_required
@@ -37,6 +38,15 @@ SSE_MAX_PER_USER = 3  # three browser tabs is normal use; a script is not
 # latency a user perceives as "live" and costs one two-probe query per stream
 # per tick — cheaper than the 1s queue wakeup this replaced.
 SSE_POLL_SECONDS = 2.0
+
+# A stream authenticates once, at connect, and then runs a `while True` for as
+# long as the socket holds. Nothing inside it re-checks the session, so an open
+# IT dashboard kept receiving live alert rows long after its session had idled
+# out — the one hole left by making polling stop refreshing the cookie. Ending
+# the generator after one session lifetime bounds that: the browser's
+# EventSource reconnects by itself, and the reconnect is a fresh, gated request
+# that either gets a new stream or a redirect to /login.
+SSE_MAX_STREAM_SECONDS = config.PERMANENT_SESSION_LIFETIME_MIN * 60
 
 @bp.route("/api/events/stream")
 @login_required
@@ -84,8 +94,9 @@ def api_events_stream():
             yield ": connected\n\n"
             status_key = agent_status_mod.SNAPSHOT_KEY
             last_id, last_status_ts = db.get_stream_watermark(status_key)
+            hard_deadline = _time.monotonic() + SSE_MAX_STREAM_SECONDS
 
-            while True:
+            while _time.monotonic() < hard_deadline:
                 # Jitter keeps a poolful of streams from phase-locking into a
                 # query herd every SSE_POLL_SECONDS.
                 _time.sleep(SSE_POLL_SECONDS + _random.uniform(0, 0.5))

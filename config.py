@@ -228,7 +228,13 @@ ESCALATION_INTERVAL_MIN = 5       # Critical alert repeat interval until ACK
 ESCALATION_MAX_AGE_H = 24
 
 # ── Session ──────────────────────────────────────────────────────────────────
-PERMANENT_SESSION_LIFETIME_MIN = 30  # Flask session timeout in minutes
+# Flask session timeout in minutes — idle time, refreshed by real user requests
+# but not by dashboard polling (see app._IdleTimeoutSessionInterface). The env
+# override exists so the timeout can actually be tested: ST-009 otherwise needs
+# a 30-minute wall-clock wait. Production leaves it unset.
+PERMANENT_SESSION_LIFETIME_MIN = int(
+    os.environ.get("INSIGHTSHIELD_SESSION_LIFETIME_MIN") or 30
+)
 
 # ── Known Devices ────────────────────────────────────────────────────────────
 KNOWN_DEVICES = ["POS-TERMINAL-01", "MANAGER-PC-01"]

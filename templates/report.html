@@ -200,7 +200,7 @@
 
   <p class="rb-body" style="margin-top:14px;">
     <strong>Limitations.</strong>
-    This audit is scoped exclusively to the NIST CSF 2.0 &mdash; Detect function; Identify, Protect, Respond, Recover, and Govern are out of scope per the project thesis. The report includes only events that matched at least one custom rule; endpoint-native events that did not trigger a rule are excluded. AI-generated summaries are cached for at most one hour; cold-cache generation may add 2&ndash;4 seconds of latency to the first request. Raw Wazuh JSON payloads in Appendix A preserve the original decoder output for independent verification.
+    This audit is scoped exclusively to the NIST CSF 2.0 &mdash; Detect function; Identify, Protect, Respond, Recover, and Govern are out of scope per the project thesis. The report includes only events that matched at least one custom rule; endpoint-native events that did not trigger a rule are excluded. AI-generated summaries are cached for at most one hour; cold-cache generation may add 2&ndash;4 seconds of latency to the first request.{% if current_user.is_it_admin %} Raw Wazuh JSON payloads in Appendix A preserve the original decoder output for independent verification.{% endif %}
   </p>
 
   <p class="rb-body" style="margin-top:14px;">
@@ -504,8 +504,10 @@
   </header>
   <p class="rb-body">
     Per-alert breakdown for {{ summary.total }} detection{{ 's' if summary.total != 1 }} in this period.
+    {% if current_user.is_it_admin %}{# the appendix this points at is IT-only #}
     Raw Wazuh JSON for each alert is in
     <a href="#appendix-raw" style="color: var(--rb-brand);">Appendix A</a>.
+    {% endif %}
   </p>
 
   {% for a in alerts %}
@@ -529,8 +531,10 @@
         {% if a.fk_grade %}<p class="rb-meta">FK grade: {{ a.fk_grade }} · Provider: {{ a.provider_used|default('—') }}</p>{% endif %}
       </div>
 
-      <!-- Forensic Detail -->
-      {% if a.attack_trail %}
+      <!-- Forensic Detail — IT_ADMIN only, same rule as the raw appendix
+           below: agent identity, source IP and process paths are decoder
+           internals, not the Manager's plain-language view. -->
+      {% if a.attack_trail and current_user.is_it_admin %}
       {% set trail = a.attack_trail|from_json if a.attack_trail is string else a.attack_trail %}
       <div style="margin-bottom: 14px;">
         <div class="rb-kpi__label">Forensic detail</div>
@@ -635,6 +639,15 @@
    Reuses the Round F navy near-black `--surface-raw-json` token + Prism Tomorrow
    theme + `pre.raw-json` wrap utility — single visual register with
    the alert-detail Raw JSON tab. #}
+{# IT_ADMIN only. This appendix is the original Wazuh decoder payload — the same
+   raw data alert_detail.html:177 has always kept behind is_it_admin, and that
+   api.py:66 gates with @role_required. /report is open to both roles by design
+   (reports.py:90), and report.html carried no role check at all, so a Manager
+   who clicked Generate got every raw payload in the range; /report.pdf was
+   worse, since reports.py force-opens each <details> before printing, so the
+   downloaded PDF had them all expanded. SYSTEM_DESIGN.md:40 says a Manager does
+   not get raw data — this is the path that contradicted it. #}
+{% if current_user.is_it_admin %}
 <section id="appendix-raw" class="mb-6">
   <header class="rb-h2">
     <span class="rb-h2__marker">§ 06</span>
@@ -666,6 +679,7 @@
   {% endif %}
   {% endfor %}
 </section>{# /appendix-raw #}
+{% endif %}{# /IT_ADMIN-only appendix #}
 
 {% else %}
 <section class="bg-white rounded-xl shadow-card border border-surface-200 p-12 text-center">
