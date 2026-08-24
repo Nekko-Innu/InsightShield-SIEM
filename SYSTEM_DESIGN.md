@@ -1059,6 +1059,57 @@ These decisions are inherited from the WatchPost lineage or codified during Roun
 | 30-minute session timeout                                         | Reduces risk of unattended sessions; enforced by `PERMANENT_SESSION_LIFETIME_MIN`. |
 | `.env` holds ONLY `FLASK_SECRET_KEY`, `ENCRYPTION_KEY`, `DATABASE_PATH` | Every other secret lives in `api_keys` (Fernet-encrypted) or `settings`; `.env` is bootstrap-only. |
 | No emoji anywhere                                                 | Every glyph goes through the `_icon.html` macro or the `.dot` class — outbound channels too. |
+| Single-factor auth on IT_ADMIN                                     | Accepted risk for a two-account, non-internet-facing branch deployment — see §15.1 AR-01 for compensating controls and the conditions that reverse it. |
+
+### 15.1 Accepted risks
+
+A risk that has been considered and accepted is a legitimate answer. A risk that
+is simply unmentioned is not — nobody can tell it apart from one that was never
+noticed. Each entry below records what the exposure is, why it is accepted, what
+compensates for it, and what would change the answer.
+
+#### AR-01 — Single-factor authentication on the IT_ADMIN role
+
+**Exposure.** `POST /admin/settings/api-keys/<service>/reveal` returns a
+decrypted credential in plaintext, and the only thing standing in front of it is
+a username and password. An attacker who obtains IT_ADMIN credentials obtains
+every stored third-party secret. Maps to OWASP Top 10:2025 A07.7 (CWE-308).
+
+**Decision: accepted** for the current deployment — one branch, two accounts,
+both operated by staff who are physically present, on a network that is not
+exposed to the internet. TOTP enrolment and recovery for two users costs more in
+operational failure modes (lost device, no second admin to reset it) than it
+removes in risk at this scale.
+
+**Compensating controls**, all present and verified:
+
+| Control | Where |
+|---|---|
+| 5 reveals per minute per user | `web/blueprints/admin_settings.py` — `rate_limit.can_call(f"reveal:{username}", limit_per_min=5)`, so a hijacked session cannot walk the key table in one burst |
+| Audit row on every reveal, storing only `last4` | same file — `action="setting.reveal.api_key"`, attributing each reveal to a user, an IP and a key without logging the secret |
+| CSRF required on the reveal endpoint | `verify_csrf()` plus the blanket check in `web/csrf.py` |
+| 30-minute idle session timeout | `PERMANENT_SESSION_LIFETIME_MIN` |
+| Logout and password change both revoke issued cookies | `users.session_epoch` folded into the digest in `web/auth_user.session_token` |
+| Credential brute force raises a HIGH alert | `alert_router.dispatch_internal_alert`, 20 failures per IP per hour |
+| Authorization probing raises a HIGH alert | `scheduler._authz_probe_sweep` |
+| Credentials encrypted at rest | Fernet, `api_keys` table |
+
+**Revisit this decision if any of the following becomes true:**
+
+- The application becomes reachable from the internet, or from an untrusted
+  network segment.
+- The account count grows past a handful, or accounts are operated by people who
+  are not physically co-located.
+- The deployment becomes multi-branch or multi-tenant.
+- A credential-stuffing or phishing attempt against these accounts is observed.
+
+**If it is revisited**, the cheaper intermediate step is step-up authentication
+rather than full MFA: require password re-entry before the reveal endpoint
+returns plaintext — roughly one form and one session flag, and it closes most of
+the gap. Full TOTP (`pyotp`, a secret column, an enrolment flow) is the answer
+once any of the conditions above holds.
+
+**Recorded** 2026-08-25, from the OWASP Top 10:2025 assessment dated 2026-08-24.
 
 ---
 

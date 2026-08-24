@@ -15,6 +15,7 @@
 import sqlite3
 import json
 import logging
+import sys
 import threading
 import time
 from datetime import datetime, timedelta
@@ -118,7 +119,10 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash         TEXT NOT NULL,
     role                  TEXT NOT NULL,
     created_at            TEXT NOT NULL,
-    must_change_password  INTEGER DEFAULT 0
+    must_change_password  INTEGER DEFAULT 0,
+    -- Bumped by logout. Folded into the session digest in web/auth_user.py, so
+    -- incrementing it invalidates every cookie already issued for the account.
+    session_epoch         INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -232,6 +236,23 @@ CREATE TABLE IF NOT EXISTS ai_cache (
 """
 
 
+def _ensure_session_epoch_column(conn) -> None:
+    """Add users.session_epoch to a database created before it existed.
+
+    CREATE TABLE IF NOT EXISTS does nothing to a table that is already there, so
+    the column in CREATE_USERS_SQL only reaches brand-new databases. There is no
+    migration framework here by design; this is the idempotent equivalent —
+    PRAGMA first, ALTER only when the column is genuinely absent. No f-string
+    SQL: the table and column are literals, never user input.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+    if "session_epoch" not in cols:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0"
+        )
+        logger.info("Schema: added users.session_epoch (logout revocation)")
+
+
 def init_db() -> None:
     """
     Initialise the DB: open connection, create the five tables, build indexes.
@@ -240,6 +261,7 @@ def init_db() -> None:
     conn = _get_conn()
     conn.execute(CREATE_ALERTS_SQL)
     conn.execute(CREATE_USERS_SQL)
+    _ensure_session_epoch_column(conn)
     conn.execute(CREATE_AUDIT_LOG_SQL)
     conn.execute(CREATE_API_KEYS_SQL)
     conn.execute(CREATE_SETTINGS_SQL)
@@ -991,6 +1013,30 @@ def verify_password(username: str, password: str) -> dict | None:
     return user if ok else None
 
 
+def bump_session_epoch(username: str) -> None:
+    """Invalidate every session cookie already issued for this account.
+
+    Logout previously cleared only the caller's own jar, which is not
+    revocation: the cookie is a self-contained signed credential, so a copy
+    taken off the wire beforehand kept working until the 30-minute signature
+    lifetime ran out. Incrementing the epoch changes the digest that
+    web/auth_user.session_token embeds in the user id, and load_user rejects
+    every cookie carrying the old one.
+
+    ponytail: per-user, not per-session — logging out of one browser signs the
+    account out everywhere. Correct-and-blunt for a two-account deployment; if
+    per-device sessions are ever wanted, this becomes a session-id table and the
+    digest keys off that instead.
+    """
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE users SET session_epoch = session_epoch + 1 WHERE username = ?",
+        (username,),
+    )
+    conn.commit()
+    logger.info("Session epoch bumped for %s — prior cookies revoked", username)
+
+
 def set_password(username: str, new_password: str) -> bool:
     """
     Update a user's password hash and clear must_change_password.
@@ -1019,6 +1065,18 @@ def seed_users_from_config() -> None:
     existing = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if existing > 0:
         return
+    # Checked only on the empty-table path, so an existing install never fails
+    # to boot over a variable it no longer needs. Mirrors
+    # crypto_utils.get_master_key(): a missing secret is a refusal to start, not
+    # a substituted default, because the substituted default here was public.
+    missing = [f"BOOTSTRAP_{u.upper()}_PASSWORD"
+               for u, d in config.USERS.items() if not d["password"]]
+    if missing:
+        logger.error(
+            "Refusing to seed default accounts: %s not set. Set them in .env - "
+            "shipping a known bootstrap password is how an install gets owned "
+            "between first boot and first login.", ", ".join(missing))
+        sys.exit(1)
     for username, data in config.USERS.items():
         try:
             create_user(
@@ -1227,6 +1285,49 @@ def search_errors(source: str | None = None,
         f"SELECT * FROM error_log{where} ORDER BY ts DESC LIMIT ?", tuple(params)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# The audit actions that together describe someone testing what they are
+# allowed to reach. Kept next to the query that counts them so a new action
+# cannot be added to one without the other being obvious.
+PROBE_ACTIONS = ("AUTHZ_DENIED", "CSRF_REJECTED", "WEBHOOK_AUTH_FAILED")
+
+
+def probe_sources_in_window(
+    actions: tuple[str, ...] = PROBE_ACTIONS,
+    since_minutes: int = 60,
+    min_count: int = 25,
+) -> list[tuple[str, int]]:
+    """
+    Source IPs with at least `min_count` matching audit rows in the window.
+
+    Deliberately a GROUP BY rather than a per-IP count like
+    failed_logins_in_window: the login throttle already knows which IP it is
+    asking about, whereas a sweep has to discover them. Returns
+    [(ip, count), ...] worst first.
+
+    The action list is bound as placeholders, not interpolated — only the
+    placeholder COUNT is derived from Python, in keeping with this module's
+    no-f-string-SQL rule.
+    """
+    if not actions:
+        return []
+    since_iso = (
+        datetime.now(tz=config.PHT) - timedelta(minutes=since_minutes)
+    ).isoformat()
+    placeholders = ",".join("?" * len(actions))
+    sql = (
+        "SELECT ip, COUNT(*) AS n FROM audit_log "
+        "WHERE action IN (" + placeholders + ") AND ts > ? AND ip IS NOT NULL "
+        "GROUP BY ip HAVING n >= ? ORDER BY n DESC"
+    )
+    try:
+        conn = _get_conn()
+        rows = conn.execute(sql, (*actions, since_iso, min_count)).fetchall()
+        return [(r["ip"], int(r["n"])) for r in rows]
+    except Exception as e:
+        logger.warning("probe_sources_in_window query failed: %s", e)
+        return []
 
 
 def failed_logins_in_window(

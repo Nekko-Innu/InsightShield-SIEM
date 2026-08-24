@@ -52,6 +52,11 @@ def short_session_server(tmp_path_factory):
     env["FLASK_SECRET_KEY"] = "timeout-test-secret-key"
     env["INSIGHTSHIELD_ALLOW_HTTP_COOKIES"] = "1"
     env["WAZUH_WEBHOOK_TOKEN"] = "timeout-test-token"
+    # Seeding refuses to run without these, and this fixture boots its own
+    # server against its own empty DB. The probe account below is created by
+    # hand; these only get the bootstrap seed past its guard.
+    env["BOOTSTRAP_ADMIN_PASSWORD"] = "timeout-Admin-Bootstrap!2026"
+    env["BOOTSTRAP_MANAGER_PASSWORD"] = "timeout-Manager-Bootstrap!2026"
     env["INSIGHTSHIELD_SESSION_LIFETIME_MIN"] = str(LIFETIME_MIN)
     env["PYTHONPATH"] = str(APP_DIR) + os.pathsep + env.get("PYTHONPATH", "")
 

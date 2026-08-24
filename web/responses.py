@@ -1,6 +1,6 @@
 # web/responses.py
-# Response helpers shared across routes. Nothing here touches the app object;
-# it is imported, not init_app'd.
+# Response helpers shared across routes, plus the after_request that puts the
+# security headers on every response.
 
 import logging
 
@@ -9,10 +9,46 @@ from flask import (
 )
 from flask_login import current_user
 
+import config
 import rate_limit
 from decorators import dashboard_endpoint_for
 
 logger = logging.getLogger("insightshield.web.responses")
+
+
+# Copied verbatim from nginx/insightshield.conf. Keep the two in sync: whichever
+# layer is in front wins silently if they drift.
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
+       "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'")
+
+PERMISSIONS_POLICY = "geolocation=(), camera=(), microphone=(), payment=(), usb=()"
+
+
+def init_app(app) -> None:
+    """Set the security headers in the app, not only in the reverse proxy.
+
+    nginx/insightshield.conf sets five of these correctly, so the posture held
+    only behind that exact proxy — `flask run`, direct-to-gunicorn, containers,
+    any other proxy and the E2E suite all got none of them. Same reasoning the
+    webhook handler already applies to body caps, which nginx also enforces and
+    the app enforces again.
+    """
+    @app.after_request
+    def _security_headers(resp):
+        # setdefault, not assignment: where nginx already set a header its value
+        # wins, so this is a floor rather than an override.
+        resp.headers.setdefault("Content-Security-Policy", CSP)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        resp.headers.setdefault("Permissions-Policy", PERMISSIONS_POLICY)
+        # Gated: a local HTTP dev session must not pin the browser to HTTPS for
+        # a year over a hostname it will keep using without TLS.
+        if config.COOKIES_REQUIRE_HTTPS:
+            resp.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return resp
 
 
 def rate_limited_response(retry_after):
@@ -44,6 +80,18 @@ def reject_csv_flood():
     if allowed:
         return None
     return rate_limited_response(retry_after)
+
+
+def csv_safe(value):
+    """Neutralise spreadsheet formula injection (CWE-1236).
+
+    csv.writer quotes, it does not neutralise. Excel, LibreOffice and Sheets
+    evaluate any cell whose first character is one of = + - @ TAB CR, so a
+    device_name posted to /wazuh-webhook executes when an analyst opens the
+    export. Prefixing with an apostrophe forces the cell to text.
+    """
+    s = "" if value is None else str(value)
+    return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
 
 
 def safe_referrer(fallback_endpoint: str = "auth.login") -> str:

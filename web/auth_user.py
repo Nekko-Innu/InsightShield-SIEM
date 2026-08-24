@@ -16,29 +16,38 @@ logger = logging.getLogger("insightshield.web.auth_user")
 login_manager = LoginManager()
 
 
-def session_token(password_hash: str | None) -> str:
+def session_token(password_hash: str | None, session_epoch: int = 0) -> str:
     """
-    Short opaque token derived from the stored password hash.
+    Short opaque token derived from the stored password hash AND a logout counter.
 
-    Embedded in the Flask-Login user id (see User.get_id) so that changing a
-    password invalidates every existing session for that account. Deriving it from the hash means no schema change and no new column
-    to keep in sync — the revocation event and the password change are the same
-    event by construction.
+    Embedded in the Flask-Login user id (see User.get_id) so that BOTH events
+    that should end a session actually end it: changing the password changes the
+    hash, and logging out increments users.session_epoch (db.bump_session_epoch).
+    Either one changes this digest, and load_user rejects any cookie carrying the
+    previous value.
+
+    The hash alone was not enough. It made password change and revocation the
+    same event by construction, which is elegant, but it left logout with no
+    event of its own to hang off — so a cookie captured before logout stayed
+    valid for the full 30-minute signature lifetime. The epoch is that missing
+    event.
 
     The password hash never leaves the server; only this digest of it does, and
     it is not reversible to the hash (let alone the password).
     """
-    return hashlib.sha256((password_hash or "").encode("utf-8")).hexdigest()[:16]
+    raw = f"{password_hash or ''}|{session_epoch}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 class User(UserMixin):
     """Flask-Login user — backed by the users table (v5 schema)."""
-    def __init__(self, username, role, must_change_password=0, password_hash=None):
+    def __init__(self, username, role, must_change_password=0, password_hash=None,
+                 session_epoch=0):
         self.id = username
         self.username = username
         self.role = role
         self.must_change_password = bool(must_change_password)
-        self.session_token = session_token(password_hash)
+        self.session_token = session_token(password_hash, session_epoch)
 
     def get_id(self):
         """
@@ -47,8 +56,8 @@ class User(UserMixin):
         It used to be the bare username, so a copied session stayed valid no
         matter what: logging out ends the session on the browser that called
         it, and changing the password invalidated nothing anywhere else.
-        Appending the password-derived token makes load_user reject any cookie
-        minted before the last password change.
+        Appending the derived token makes load_user reject any cookie minted
+        before the last password change or the last logout.
         """
         return f"{self.username}:{self.session_token}"
 
@@ -87,9 +96,11 @@ def load_user(user_id):
     if not user_data:
         return None
 
-    expected = session_token(user_data.get("password_hash"))
+    expected = session_token(user_data.get("password_hash"),
+                             user_data.get("session_epoch", 0))
     if not hmac.compare_digest(token, expected):
-        logger.info("Rejecting stale session for %s (password changed)", username)
+        logger.info("Rejecting stale session for %s (password change or logout)",
+                    username)
         return None
 
     return User(
@@ -97,6 +108,7 @@ def load_user(user_id):
         user_data["role"],
         must_change_password=user_data.get("must_change_password", 0),
         password_hash=user_data.get("password_hash"),
+        session_epoch=user_data.get("session_epoch", 0),
     )
 
 
@@ -111,5 +123,5 @@ def init_app(app) -> None:
     # session.permanent = True so PERMANENT_SESSION_LIFETIME applies — so a
     # permanent session takes the basic branch (mark _fresh False, session
     # survives) and never reaches the strong branch. Session revocation on this
-    # app rests on the password-derived token in User.get_id, not on this line.
+    # app rests on the derived token in User.get_id, not on this line.
     login_manager.session_protection = "strong"

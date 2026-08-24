@@ -92,10 +92,16 @@ else
     && pass "venv: created" || die "venv: creation failed"
 fi
 
-if runuser -u "$SVC_USER" -- "$VENV/bin/pip" install -q -r "$APP/requirements.txt"; then
-  pass "venv: requirements installed"
+# From the lock, not requirements.txt. --require-hashes makes pip refuse any
+# artifact whose SHA-256 is not the one recorded at lock time, so a substituted
+# or tampered wheel fails the install instead of shipping. requirements.txt is
+# the INPUT to the lock and must never be the install manifest — installing it
+# directly resolves whatever is newest that day, which is neither reproducible
+# nor verified.
+if runuser -u "$SVC_USER" -- "$VENV/bin/pip" install -q --require-hashes -r "$APP/requirements.lock"; then
+  pass "venv: locked requirements installed (hash-verified)"
 else
-  fail "venv: pip install failed"
+  fail "venv: pip install failed — a hash mismatch here means the lock and the index disagree; do NOT bypass with requirements.txt"
 fi
 
 # ── 4. .env and secrets ──────────────────────────────────────────────────────

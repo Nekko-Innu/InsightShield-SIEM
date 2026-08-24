@@ -42,7 +42,7 @@ def get_agent_status() -> list[dict]:
             auth_resp = requests.post(
                 f"{wazuh_url}/security/user/authenticate",
                 auth=(wazuh_user, wazuh_password),
-                verify=config.WAZUH_API_VERIFY or False,
+                verify=config.WAZUH_API_VERIFY,
                 timeout=5,
             )
             if auth_resp.status_code == 200:
@@ -51,7 +51,7 @@ def get_agent_status() -> list[dict]:
                 agents_resp = requests.get(
                     f"{wazuh_url}/agents",
                     headers={"Authorization": f"Bearer {token}"},
-                    verify=config.WAZUH_API_VERIFY or False,
+                    verify=config.WAZUH_API_VERIFY,
                     timeout=5,
                 )
                 if agents_resp.status_code == 200:

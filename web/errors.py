@@ -79,6 +79,23 @@ def _handle_not_found(e):
 
 
 def _handle_forbidden(e):
+    # Every denied role check lands here, so this is the single place an
+    # authorization sweep is countable from.
+    # ponytail: one audit row per 403, unthrottled, so a flood of denied
+    # requests is also a flood of small writes. Bounded by the 90-day
+    # AUDIT_RETENTION_DAYS purge, and the flood is exactly what the probe sweep
+    # now alerts on. Add a per-IP write cap only if audit_log growth is measured
+    # to be a problem — capping it blindly would blind the detector. Recorded with the actor when there
+    # is one — an authenticated user probing above their role is a different
+    # story from an anonymous scanner, and the audit view can tell them apart.
+    db.log_audit(
+        action="AUTHZ_DENIED",
+        actor=getattr(current_user, "username", None),
+        actor_role=getattr(current_user, "role", None),
+        target=request.endpoint or request.path,
+        ip=request.remote_addr,
+        user_agent=request.headers.get("User-Agent", ""),
+    )
     if _is_machine_path(request.path):
         return jsonify({"error": "forbidden"}), 403
     return render_error(

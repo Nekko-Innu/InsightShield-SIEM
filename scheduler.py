@@ -122,6 +122,21 @@ def init_scheduler() -> None:
     except Exception as e:
         logger.warning("Could not register escalation sweep: %s", e)
 
+    # Authorization-probe detection. Sweeps more often than the window is long,
+    # so a campaign is caught while it is still running rather than after it.
+    try:
+        _scheduler.add_job(
+            _authz_probe_sweep,
+            trigger="interval",
+            minutes=config.AUTHZ_PROBE_SWEEP_MIN,
+            id="authz_probe_sweep",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+    except Exception as e:
+        logger.warning("Could not register authz probe sweep: %s", e)
+
     # Job failures used to be invisible: only the escalation job wrapped itself,
     # so an exception in the backup or agent-status job surfaced in
     # APScheduler's own logger and never reached error_log or the Errors tab.
@@ -172,6 +187,55 @@ def _on_job_error(event) -> None:
         # Never let the error reporter raise inside the scheduler's own
         # listener — that would take the scheduler thread down.
         logger.exception("Failed to record scheduled-job error for %s", event.job_id)
+
+
+def _authz_probe_sweep() -> None:
+    """Turn a run of authorization failures from one source into an alert.
+
+    Twenty-five denied requests from one IP in an hour is a campaign, not a
+    typo. The audit that prompted this issued roughly two hundred hostile
+    requests — role-denied routes, forged CSRF tokens, webhook auth failures —
+    and every one of them produced a log line and nothing else, so the operator
+    had no way to know it was happening.
+
+    A sweep rather than a check at each rejection site, for the same reason
+    _escalation_sweep is a sweep: the counting belongs in the database, where
+    every worker process can see it, not in the memory of whichever worker
+    happened to serve the request that crossed the threshold.
+
+    Dedupe lives in alert_router.dispatch_internal_alert, so a campaign that
+    keeps running produces one alert per window, not one per sweep.
+    """
+    import alert_router
+    import db
+
+    sources = db.probe_sources_in_window(
+        since_minutes=config.AUTHZ_PROBE_WINDOW_MIN,
+        min_count=config.AUTHZ_PROBE_LIMIT,
+    )
+    if not sources:
+        return
+
+    logger.warning("AUTHZ PROBE: %d source(s) over threshold", len(sources))
+    for ip, count in sources:
+        try:
+            alert_router.dispatch_internal_alert(
+                attack_type="authorization_probe",
+                rule_id="ISH-AZP-001",
+                source_ip=ip,
+                plain_text=(
+                    f"{count} authorization failures from {ip} in "
+                    f"{config.AUTHZ_PROBE_WINDOW_MIN} min — denied roles, rejected "
+                    f"CSRF tokens and webhook auth failures combined. Consistent "
+                    f"with someone mapping what this account can reach."
+                ),
+                evidence={"count": count,
+                          "window_min": config.AUTHZ_PROBE_WINDOW_MIN},
+                dedupe_minutes=config.AUTHZ_PROBE_WINDOW_MIN,
+            )
+        except Exception as e:
+            # One bad source must not abandon the rest of the sweep.
+            logger.error("Authz probe alert failed for ip=%s: %s", ip, e)
 
 
 def _escalation_sweep() -> None:

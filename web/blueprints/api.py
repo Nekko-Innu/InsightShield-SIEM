@@ -63,7 +63,7 @@ def api_client_error():
     )
     return jsonify({"status": "logged"}), 200
 
-@bp.route("/api/alert/<int:alert_id>")
+@bp.route("/api/alert/<int(min=1, max=2147483647):alert_id>")
 @login_required
 @role_required(ROLE_IT_ADMIN)
 def api_alert(alert_id):

@@ -17,6 +17,11 @@ PORT = 5099
 BASE_URL = f"http://{HOST}:{PORT}"
 # The suite asserts both webhook gates, so the token has to be a known value.
 WEBHOOK_TOKEN = "e2e-webhook-token"
+# db.seed_users_from_config() refuses to seed without these, so every spawned
+# server has to supply them. They are test values, not defaults: config.py no
+# longer carries a fallback, which is the point of the change.
+BOOTSTRAP_ADMIN_PASSWORD = "e2e-Admin-Bootstrap!2026"
+BOOTSTRAP_MANAGER_PASSWORD = "e2e-Manager-Bootstrap!2026"
 
 
 def _wait_for_health(url: str, timeout: float = 15.0) -> None:
@@ -173,6 +178,8 @@ def live_server(tmp_path_factory):
     # /wazuh-webhook fails closed without this, so an unset token would turn
     # every ingest assertion into a 403.
     env["WAZUH_WEBHOOK_TOKEN"] = WEBHOOK_TOKEN
+    env["BOOTSTRAP_ADMIN_PASSWORD"] = BOOTSTRAP_ADMIN_PASSWORD
+    env["BOOTSTRAP_MANAGER_PASSWORD"] = BOOTSTRAP_MANAGER_PASSWORD
     # Production runs the scheduler in insightshield-worker.service, so the web
     # app no longer starts one by itself. The suite is a single process and
     # still wants the 30s agent-status poll (the login page's status strip reads

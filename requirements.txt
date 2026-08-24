@@ -1,3 +1,22 @@
+# Direct dependencies only. The resolved, hashed, reproducible set lives in
+# requirements.lock — that is what gets installed:
+#
+#   pip install --require-hashes -r requirements.lock
+#
+# Regenerate the lock after editing this file:
+#
+#   uv pip compile requirements.txt -o requirements.lock --generate-hashes \
+#       --python-platform x86_64-unknown-linux-gnu --python-version 3.12
+#
+# The platform and version flags are load-bearing: the deployment target is
+# Ubuntu 24.04 / Python 3.12 (docs/deployment-ubuntu.md), and a lock resolved on
+# a developer's Windows box pins a different, wrong dependency set.
+#
+# Version floors below are SECURITY minimums, not preferences — never lower one
+# without checking the advisory it cites. Everything unpinned here is pinned in
+# the lock; leaving them open here is what lets `uv pip compile` move them
+# forward deliberately rather than on every install.
+
 flask
 flask-login
 python-dotenv
@@ -7,5 +26,8 @@ requests
 apscheduler
 textstat
 gunicorn
-cryptography>=42.0  # Fernet encryption for api_keys table (Round 3)
+# Fernet encryption for the api_keys table (Round 3) — this is the whole
+# credential-at-rest story, so it gets the tightest floor. 46.0.7 carries
+# PYSEC-2026-3552/3553/3554 and GHSA-537c-gmf6-5ccf.
+cryptography>=50.0.0
 playwright>=1.45    # Headless Chromium for /report.pdf export (Round G §18)

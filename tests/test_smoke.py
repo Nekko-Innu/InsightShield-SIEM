@@ -6,11 +6,14 @@ router, just a tripwire against "the app doesn't even boot" regressions.
 """
 import re
 
-IT_ADMIN = {"username": "admin", "password": "insightshield2026"}
-MANAGER = {"username": "manager", "password": "branch2026"}
+from conftest import BOOTSTRAP_ADMIN_PASSWORD, BOOTSTRAP_MANAGER_PASSWORD
 
-# The seeded passwords live in config.py:USERS and are therefore public, so
-# db.seed_users_from_config now sets must_change_password=1. First login for
+IT_ADMIN = {"username": "admin", "password": BOOTSTRAP_ADMIN_PASSWORD}
+MANAGER = {"username": "manager", "password": BOOTSTRAP_MANAGER_PASSWORD}
+
+# The seeded passwords come from the fixture's environment — config.py has no
+# fallback literals any more — and db.seed_users_from_config sets
+# must_change_password=1. First login for
 # each account is redirected to /account/password and cannot proceed until the
 # password is rotated. _login below completes that rotation once per account
 # and remembers the new value for the rest of the session-scoped live_server.
