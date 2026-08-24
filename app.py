@@ -7,6 +7,7 @@
 import logging
 import logging.handlers
 import os
+import re
 from datetime import timedelta
 from pathlib import Path
 
@@ -26,7 +27,7 @@ crypto_utils.get_master_key()
 import db
 import scheduler
 
-from web import auth_user, csrf, errors, filters, hooks
+from web import auth_user, csrf, errors, filters, hooks, responses
 from web.blueprints import (
     admin_ops, admin_settings, alerts, api, auth, dashboards, reports, stream,
     webhook,
@@ -38,7 +39,34 @@ from web.blueprints import (
 # queryable, size-capped log independent of that). 5MB x 5 backups.
 _log_dir = Path("logs")
 _log_dir.mkdir(parents=True, exist_ok=True)
-_log_formatter = logging.Formatter(
+# Newlines and other control characters in an interpolated value let an
+# attacker write whole extra lines into the log an investigator later reads
+# (CWE-117). A device_name posted to /wazuh-webhook containing CRLF plus a
+# plausible prefix produced a genuine forged "LOGIN_SUCCESS admin" entry.
+# Escaped at the formatter rather than at each logger.* call: the tainted values
+# arrive from the webhook, the audit hook and the error handler, and any single
+# call site forgetting is a forged line. \t is deliberately not escaped — a tab
+# cannot fake a line, and escaping it would mangle readable output.
+_CTRL_CHARS = re.compile(r"[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+class _ControlCharFormatter(logging.Formatter):
+    """Formatter that neutralises control characters in the message.
+
+    formatMessage, not format: record.message is the interpolated message only,
+    so exception tracebacks — which contain legitimate newlines and would be
+    unreadable as one escaped line — pass through untouched. record.message is
+    rebuilt by format() on every call, so this cannot double-escape when a
+    record reaches both handlers.
+    """
+
+    def formatMessage(self, record):
+        record.message = _CTRL_CHARS.sub(
+            lambda m: "\\x%02x" % ord(m.group()), record.message)
+        return super().formatMessage(record)
+
+
+_log_formatter = _ControlCharFormatter(
     "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -168,6 +196,7 @@ def create_app() -> Flask:
     errors.init_app(app)
     filters.init_app(app)
     auth_user.init_app(app)
+    responses.init_app(app)
 
     # URL rules are unchanged by the split — only endpoint names gained a
     # blueprint prefix — so nginx, smoke_test.sh and existing bookmarks are

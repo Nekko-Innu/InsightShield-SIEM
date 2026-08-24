@@ -27,8 +27,10 @@ set -u
 
 BASE="${1:-https://127.0.0.1}"
 WEBHOOK_TOKEN="${SMOKE_WEBHOOK_TOKEN:-}"
-ADMIN_PASSWORD="${SMOKE_ADMIN_PASSWORD:-insightshield2026}"
-MANAGER_PASSWORD="${SMOKE_MANAGER_PASSWORD:-branch2026}"
+# No defaults: the bootstrap literals were removed from config.py, so there is
+# nothing left to guess. Export the real values before running this.
+ADMIN_PASSWORD="${SMOKE_ADMIN_PASSWORD:?set SMOKE_ADMIN_PASSWORD}"
+MANAGER_PASSWORD="${SMOKE_MANAGER_PASSWORD:?set SMOKE_MANAGER_PASSWORD}"
 COOKIES="$(mktemp)"
 trap 'rm -f "$COOKIES"' EXIT
 

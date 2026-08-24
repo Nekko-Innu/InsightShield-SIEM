@@ -277,6 +277,52 @@ services first; restoring under a running app races the WAL.
 
 ---
 
+## Dependency review
+
+Dependencies are declared in `requirements.txt` and **installed from
+`requirements.lock`**, which pins every transitive package to an exact version
+and SHA-256. `scripts/install.sh` uses `--require-hashes`, so a wheel that does
+not match the recorded hash fails the install rather than shipping.
+
+**Never install `requirements.txt` directly on a server.** It is the input to
+the lock, not an install manifest — unconstrained resolution pulls whatever is
+newest that day, which is neither reproducible nor verified. It also produces a
+misleading audit: scanning the unpinned file reports a clean bill of health for
+a resolution nobody ever installed, while the closure actually running carries
+advisories. That gap is exactly what this arrangement closes.
+
+The lock is resolved for the deployment target, so it cannot be installed on a
+Windows or macOS development machine — the pinned wheels are Linux ones. Develop
+against `requirements.txt`; the lock governs servers.
+
+### Cadence
+
+| When | Do |
+|---|---|
+| Monthly | `pip-audit -r requirements.lock` and review the result |
+| Any advisory rated High or above in a direct dependency | Act immediately — do not wait for the monthly pass |
+| After editing `requirements.txt` | Regenerate the lock and re-run the suite before shipping |
+
+### Commands
+
+```bash
+# Audit the set that actually gets installed.
+pip-audit -r requirements.lock
+
+# Regenerate after changing requirements.txt. The platform and version flags are
+# load-bearing: the target is Ubuntu 24.04 / Python 3.12, and a lock resolved on
+# a developer's machine pins a different, wrong dependency set.
+uv pip compile requirements.txt -o requirements.lock --generate-hashes     --python-platform x86_64-unknown-linux-gnu --python-version 3.12
+
+# Then, always:
+python -m pytest
+```
+
+Version floors in `requirements.txt` are security minimums and cite the advisory
+that forced them. Lowering one re-opens the vulnerability it names.
+
+---
+
 **See also:** `deployment-ubuntu.md` (install and §8 install-time troubleshooting),
 `webhook-contract.md` (ingest contract and its own troubleshooting table),
 `architecture.md` (why state lives where it does).

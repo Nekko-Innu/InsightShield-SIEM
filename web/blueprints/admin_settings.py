@@ -560,7 +560,7 @@ def _test_service_probe(service: str) -> tuple[str, str]:
         try:
             auth = requests.post(
                 f"{url}/security/user/authenticate",
-                auth=(user, pwd), verify=config.WAZUH_API_VERIFY or False, timeout=5,
+                auth=(user, pwd), verify=config.WAZUH_API_VERIFY, timeout=5,
             )
             if auth.status_code != 200:
                 return "offline", f"Wazuh: auth returned HTTP {auth.status_code}"
@@ -568,7 +568,7 @@ def _test_service_probe(service: str) -> tuple[str, str]:
             agents = requests.get(
                 f"{url}/agents?limit=1",
                 headers={"Authorization": f"Bearer {token}"},
-                verify=config.WAZUH_API_VERIFY or False, timeout=5,
+                verify=config.WAZUH_API_VERIFY, timeout=5,
             )
             if agents.status_code == 200:
                 return "online", f"Wazuh: API reachable at {url}"

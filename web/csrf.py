@@ -9,7 +9,9 @@ import logging
 import secrets
 
 from flask import flash, jsonify, redirect, request, session
+from flask_login import current_user
 
+import db
 from decorators import _is_machine_path
 
 from web.responses import safe_referrer
@@ -71,6 +73,17 @@ def _enforce_csrf():
     logger.warning(
         "CSRF reject: endpoint=%s path=%s ip=%s",
         request.endpoint, request.path, request.remote_addr,
+    )
+    # A log line is not a detection. This row is what
+    # db.probe_sources_in_window counts, and it is the difference between a
+    # forged-request campaign being visible to the operator and being visible
+    # only to whoever greps the file afterwards.
+    db.log_audit(
+        action="CSRF_REJECTED",
+        actor=getattr(current_user, "username", None),
+        target=request.endpoint or request.path,
+        ip=request.remote_addr,
+        user_agent=request.headers.get("User-Agent", ""),
     )
     if _is_machine_path(request.path):
         return jsonify({"error": "csrf"}), 403

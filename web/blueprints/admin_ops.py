@@ -11,7 +11,7 @@ from flask_login import current_user, login_required
 import backup as backup_mod
 import db
 from decorators import role_required
-from web.responses import reject_csv_flood
+from web.responses import csv_safe, reject_csv_flood
 
 logger = logging.getLogger("insightshield.web.admin_ops")
 
@@ -160,7 +160,28 @@ def admin_audit_csv():
     w = csv.writer(buf)
     w.writerow(cols)
     for r in rows:
-        w.writerow([r.get(k, "") for k in cols])
+        w.writerow([csv_safe(r.get(k, "")) for k in cols])
+
+    # /export.csv has recorded an EXPORT_CSV row since it shipped; this route
+    # recorded nothing. The one action that copies the audit trail out of the
+    # system was the one action the audit trail did not contain — so an analyst
+    # reviewing who saw what could not see this. The filters go in the row too:
+    # "exported the audit log" and "exported every action by one user in one
+    # week" are different events and the row has to tell them apart.
+    db.log_audit(
+        action="EXPORT_AUDIT_CSV",
+        actor=current_user.username,
+        actor_role=current_user.role,
+        target="audit_log",
+        ip=request.remote_addr,
+        user_agent=request.headers.get("User-Agent", ""),
+        details={
+            "row_count": len(rows),
+            "truncated": len(rows) >= 5000,
+            "filters": {"actor": actor, "action": action,
+                        "from": date_from, "to": date_to},
+        },
+    )
 
     return Response(
         buf.getvalue(),

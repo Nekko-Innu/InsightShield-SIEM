@@ -260,12 +260,41 @@ FORBIDDEN_WORDS = [
 WAZUH_API_URL      = os.environ.get("WAZUH_API_URL", "https://127.0.0.1:55000")
 WAZUH_API_USER     = os.environ.get("WAZUH_API_USER", "wazuh-wui")
 WAZUH_API_PASSWORD  = os.environ.get("WAZUH_API_PASSWORD", "")
-# Path to a CA bundle for the Wazuh manager's certificate. Empty (the default)
-# keeps the historical verify=False, which the lab's self-signed cert needs;
-# every caller does `verify=config.WAZUH_API_VERIFY or False`. Point this at a
-# real bundle in production and the four call sites start verifying with no
-# further change.
-WAZUH_API_VERIFY   = os.environ.get("WAZUH_API_VERIFY", "")
+# TLS verification for the Wazuh API. Three accepted forms:
+#   unset            -> True, verify against the system trust store
+#   a filesystem path -> that CA bundle (what a self-signed lab manager wants)
+#   0/false/no/off   -> False, no verification at all, warned about loudly
+# This used to default to "" while every caller wrote
+# `verify=config.WAZUH_API_VERIFY or False`, so the shipped default sent
+# WAZUH_API_USER and WAZUH_API_PASSWORD over an unvalidated TLS channel. The
+# callers now pass the value straight through — dropping `or False` is the
+# load-bearing half of the fix.
+_verify_raw = os.environ.get("WAZUH_API_VERIFY", "").strip()
+if _verify_raw.lower() in ("0", "false", "no", "off"):
+    WAZUH_API_VERIFY = False
+    logger.warning(
+        "WAZUH_API_VERIFY is disabled - Wazuh API credentials will cross an "
+        "unverified TLS channel. Acceptable for a self-signed lab manager, "
+        "never for production. Point it at the manager's CA bundle instead."
+    )
+elif _verify_raw:
+    WAZUH_API_VERIFY = _verify_raw      # path to a CA bundle
+else:
+    WAZUH_API_VERIFY = True             # system trust store
+
+# ── Authorization-probe detection (A09.7) ────────────────────────────────────
+# The audit that prompted this fired ~200 hostile requests — SQL injection
+# across 8 parameters, XSS, SSRF, forged session cookies and a full unauthorized
+# sweep of every route — and raised no alert, because 403s, CSRF rejections and
+# webhook auth failures were logger.warning and nothing else. Logging without
+# alerting is what A09 was renamed to catch.
+#
+# Start the limit high and lower it once there is a baseline: A09 names
+# false-positive volume as its own failure mode, and an operator who learns to
+# ignore this alert is worse off than one who never had it.
+AUTHZ_PROBE_LIMIT      = int(os.environ.get("AUTHZ_PROBE_LIMIT", "25"))
+AUTHZ_PROBE_WINDOW_MIN = int(os.environ.get("AUTHZ_PROBE_WINDOW_MIN", "60"))
+AUTHZ_PROBE_SWEEP_MIN  = int(os.environ.get("AUTHZ_PROBE_SWEEP_MIN", "10"))
 
 # ── Hardcoded Users — BOOTSTRAP ONLY (Flask-Login) ───────────────────────────
 # ⚠  Runtime authentication reads the `users` table in insightshield.db, not this dict.
@@ -279,19 +308,19 @@ WAZUH_API_VERIFY   = os.environ.get("WAZUH_API_VERIFY", "")
 # every comparison in the app was an IT_ADMIN test with an implicit else.
 # Bootstrap-only: db.seed_users_from_config() no-ops once users is non-empty, so
 # changing this does NOT fix an already-seeded row.
-# The literals below are in a public repo, so a deployment that wants a
-# non-public first password sets BOOTSTRAP_*_PASSWORD in .env. Either way
-# db.seed_users_from_config sets must_change_password=1, so the first login is
-# forced through /account/password before anything else works.
-# `or` rather than a get() default: .env.example ships both keys blank, and a
-# blank value in the environment would otherwise seed an empty password.
+# No literal fallbacks. These used to carry committed defaults, which meant a
+# fresh install authenticated with a password anyone could read off the public
+# repo for the whole window between first boot and first login — and IT_ADMIN
+# can reveal every stored credential. db.seed_users_from_config() refuses to
+# seed an empty password rather than substituting one. must_change_password=1
+# still forces the first login through /account/password.
 USERS = {
     "admin": {
-        "password": os.environ.get("BOOTSTRAP_ADMIN_PASSWORD") or "insightshield2026",
+        "password": os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", ""),
         "role": "IT_ADMIN",
     },
     "manager": {
-        "password": os.environ.get("BOOTSTRAP_MANAGER_PASSWORD") or "branch2026",
+        "password": os.environ.get("BOOTSTRAP_MANAGER_PASSWORD", ""),
         "role": "MANAGER",
     },
 }

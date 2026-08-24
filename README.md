@@ -78,10 +78,14 @@ INSIGHTSHIELD_RUN_SCHEDULER=1 flask run
 
 Bootstrap accounts, both forced through a password change on first login:
 
-| Role     | Username  | Password            |
-|----------|-----------|---------------------|
-| IT Admin | `admin`   | `insightshield2026` |
-| Manager  | `manager` | `branch2026`        |
+| Role     | Username  | First-boot password           |
+|----------|-----------|-------------------------------|
+| IT Admin | `admin`   | `BOOTSTRAP_ADMIN_PASSWORD`    |
+| Manager  | `manager` | `BOOTSTRAP_MANAGER_PASSWORD`  |
+
+Both must be set in `.env` before the first run. There are no defaults: seeding
+refuses to run without them, because a password published here would own the
+IT_ADMIN role until somebody logged in and changed it.
 
 Serving over plain HTTP will drop the session cookie, because `Secure` is on by default. For local
 work without TLS, set `INSIGHTSHIELD_ALLOW_HTTP_COOKIES=1` — and never set it in production.

@@ -82,6 +82,41 @@ def test_logout_ends_access_and_issues_no_remember_cookie(live_server, live_serv
     assert after.status_code == 302 and "/login" in after.headers["Location"]
 
 
+def test_captured_cookie_is_dead_after_logout(live_server, live_server_db):
+    """Logout must revoke the cookie itself, not merely the browser's copy.
+
+    The test above proves the *same* client cannot continue, which is a weaker
+    claim than it looks: session.clear() and logout_user() only empty the jar in
+    front of them. A value copied off the wire beforehand is a complete,
+    still-signed credential, and against the build before this change it
+    replayed from a fresh client straight into the dashboard with HTTP 200.
+    """
+    _create_user(live_server_db)
+    s = requests.Session()
+
+    token = _csrf(s, live_server)
+    login = s.post(f"{live_server}/login",
+                   data={"username": USERNAME, "password": PASSWORD, "_csrf": token},
+                   allow_redirects=False)
+    assert login.status_code == 302
+    # Captured while the session is live — this is the attacker's copy.
+    stolen = s.cookies["session"]
+    assert s.get(f"{live_server}/dashboard/it").status_code == 200
+
+    page = s.get(f"{live_server}/dashboard/it")
+    token = re.search(r'name="csrf-token" content="([^"]+)"', page.text).group(1)
+    logout = s.post(f"{live_server}/logout", data={"_csrf": token},
+                    allow_redirects=False)
+    assert logout.status_code == 302
+
+    replay = requests.Session()
+    replay.cookies.set("session", stolen, domain="127.0.0.1", path="/")
+    resp = replay.get(f"{live_server}/dashboard/it", allow_redirects=False)
+    assert resp.status_code == 302 and "/login" in resp.headers["Location"], (
+        "a session cookie captured before logout still authenticates"
+    )
+
+
 def test_legacy_remember_cookie_does_not_authenticate(live_server, live_server_db):
     """A remember_token minted by the previous build must be dead on arrival.
 

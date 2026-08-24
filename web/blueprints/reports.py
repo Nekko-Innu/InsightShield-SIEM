@@ -16,7 +16,7 @@ import db
 import rate_limit
 from decorators import role_required
 from wazuh_api import get_agent_status
-from web.responses import rate_limited_response, reject_csv_flood
+from web.responses import csv_safe, rate_limited_response, reject_csv_flood
 
 logger = logging.getLogger("insightshield.web.reports")
 
@@ -68,7 +68,7 @@ def export_csv():
     w.writerow(cols)
     for a in rows:
         row = dict(a) if not isinstance(a, dict) else a
-        w.writerow([row.get(k, "") for k in cols])
+        w.writerow([csv_safe(row.get(k, "")) for k in cols])
     db.log_audit(
         action="EXPORT_CSV",
         actor=current_user.username,

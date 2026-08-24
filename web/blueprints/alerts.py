@@ -16,7 +16,12 @@ logger = logging.getLogger("insightshield.web.alerts")
 bp = Blueprint("alerts", __name__)
 
 
-@bp.route("/alert/<int:alert_id>")
+# Bounded on the converter, not in the body: Flask's bare <int:> accepts
+# arbitrarily large values and SQLite rejects anything past 2**63, so
+# /alert/9223372036854775808 raised out of the DB layer as an HTTP 500.
+# Out of range now simply fails to match the rule and 404s, which covers
+# the POST children and /api/alert the same way for free.
+@bp.route("/alert/<int(min=1, max=2147483647):alert_id>")
 @login_required
 def alert_detail(alert_id):
     alert = db.get_alert(alert_id)
@@ -29,7 +34,7 @@ def alert_detail(alert_id):
         user=current_user,
     )
 
-@bp.route("/alert/<int:alert_id>/it-acknowledge", methods=["POST"], endpoint="it_acknowledge")
+@bp.route("/alert/<int(min=1, max=2147483647):alert_id>/it-acknowledge", methods=["POST"], endpoint="it_acknowledge")
 @login_required
 @role_required("IT_ADMIN")
 def it_acknowledge_alias(alert_id):
@@ -67,7 +72,7 @@ def acknowledge(alert_id):
         return _respond(True, "Alert acknowledged successfully.", "success")
     return _respond(False, "Alert already acknowledged or not found.", "warning", 404)
 
-@bp.route("/alert/<int:alert_id>/resolve", methods=["POST"])
+@bp.route("/alert/<int(min=1, max=2147483647):alert_id>/resolve", methods=["POST"])
 @login_required
 @role_required("IT_ADMIN")
 def resolve_alert(alert_id):

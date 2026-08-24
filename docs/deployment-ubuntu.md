@@ -696,11 +696,14 @@ stream they hold — down with them.
 
 ### 5.8 First login
 
-Browse to `https://192.168.100.30`. Seeded accounts are
-`admin` / `insightshield2026` and `manager` / `branch2026` — both are **forced
-through a password change on first login**. Set `BOOTSTRAP_ADMIN_PASSWORD` and
-`BOOTSTRAP_MANAGER_PASSWORD` in `.env` *before* first boot to avoid the public
-defaults ever existing.
+Browse to `https://192.168.100.30`. The seeded accounts are `admin` and
+`manager`, and their first-boot passwords come from `BOOTSTRAP_ADMIN_PASSWORD`
+and `BOOTSTRAP_MANAGER_PASSWORD` in `.env`. **Both must be set before the first
+boot** — seeding calls `sys.exit(1)` rather than falling back, so a fresh
+install with them unset will not start. There are deliberately no defaults:
+a password published in this repo would own the IT_ADMIN role for the whole
+window between first boot and first login. Both accounts are still **forced
+through a password change on first login**.
 
 ---
 

@@ -10,6 +10,7 @@ import logging
 from flask import Blueprint, jsonify, request
 
 import config
+import db
 import rate_limit
 import wazuh_receiver
 from web.responses import rate_limited_response
@@ -45,6 +46,14 @@ def wazuh_webhook():
     allowed_ips = ["127.0.0.1", "::1", "192.168.100.30"]
     if request.remote_addr not in allowed_ips:
         logger.warning("Webhook rejected from unauthorized IP: %s", request.remote_addr)
+        db.log_audit(
+            action="WEBHOOK_AUTH_FAILED",
+            actor="anonymous",
+            target="wazuh-webhook",
+            ip=request.remote_addr,
+            user_agent=request.headers.get("User-Agent", ""),
+            details="reason=ip_not_allowlisted",
+        )
         return jsonify({"error": "Unauthorized"}), 403
 
     import hmac as _hmac
@@ -58,6 +67,16 @@ def wazuh_webhook():
         logger.warning(
             "Webhook rejected: bad or missing X-Webhook-Token from %s",
             request.remote_addr,
+        )
+        db.log_audit(
+            action="WEBHOOK_AUTH_FAILED",
+            actor="anonymous",
+            target="wazuh-webhook",
+            ip=request.remote_addr,
+            user_agent=request.headers.get("User-Agent", ""),
+            # Which gate failed matters: an allowlisted host with a bad token is
+            # a misconfigured integrator or a compromised host, not a stranger.
+            details="reason=bad_or_missing_token" if token else "reason=token_unset",
         )
         return jsonify({"error": "Unauthorized"}), 403
 
