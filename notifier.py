@@ -8,6 +8,7 @@
 
 import logging
 import smtplib
+import ssl
 import threading
 import time
 from email.mime.text import MIMEText
@@ -17,6 +18,23 @@ import requests
 
 import config
 import _request_cache
+
+
+def _redact(text: str, *secrets) -> str:
+    """Blank out secret values that may have been interpolated into `text`.
+
+    The Telegram bot token is part of the request URL, and requests embeds the
+    full URL in its exception strings — so `logger.error("...: %s", e)` on a
+    DNS or TLS failure wrote the token verbatim into logs/insightshield.log and,
+    through the stderr handler, into the gunicorn error log. A transient egress
+    outage wrote it once per alert and once per escalation sweep. The Settings
+    "Test" path already avoided this by logging only the exception class;
+    dispatch keeps the message, minus the secret.
+    """
+    for secret in secrets:
+        if secret:
+            text = text.replace(str(secret), "***REDACTED***")
+    return text
 
 logger = logging.getLogger("insightshield.notifier")
 
@@ -79,7 +97,9 @@ def _post_telegram(bot_token: str, chat_id: str, text: str,
         )
         return False
     except Exception as e:
-        logger.error("%s error: %s", label, e)
+        # Redacted: the token is in the URL and requests puts the URL in `e`.
+        logger.error("%s error: %s: %s", label, type(e).__name__,
+                     _redact(str(e), bot_token))
         return False
 
 
@@ -237,7 +257,11 @@ def send_email(alert: dict) -> bool:
         # timeout is not optional: without it a blackholed Gmail leaves the
         # escalation sweep blocked on connect() forever.
         with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
-            server.starttls()
+            # An explicit context is required. smtplib's starttls() with
+            # context=None falls back to ssl._create_stdlib_context(), which is
+            # check_hostname=False / verify_mode=CERT_NONE — so the Gmail app
+            # password crossed a completely unverified channel on every alert.
+            server.starttls(context=ssl.create_default_context())
             server.login(gmail_address, gmail_password)
             server.sendmail(gmail_address, recipient, msg.as_string())
 
@@ -245,5 +269,6 @@ def send_email(alert: dict) -> bool:
         return True
 
     except Exception as e:
-        logger.error("Email error: %s", e)
+        logger.error("Email error: %s: %s", type(e).__name__,
+                     _redact(str(e), gmail_password))
         return False

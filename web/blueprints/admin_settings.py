@@ -7,6 +7,7 @@
 
 import json as _json
 import logging
+import ssl
 
 from flask import (
     Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for,
@@ -542,7 +543,8 @@ def _test_service_probe(service: str) -> tuple[str, str]:
             return "offline", "Gmail: from-address or app password not set"
         try:
             with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as smtp:
-                smtp.starttls()
+                # Verified TLS: bare starttls() is CERT_NONE. See notifier.py.
+                smtp.starttls(context=ssl.create_default_context())
                 smtp.login(addr, pwd)
             return "online", f"Gmail: SMTP login succeeded for {addr}"
         except smtplib.SMTPAuthenticationError:
