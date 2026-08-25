@@ -45,7 +45,7 @@ This document is the master spec for the Insight Shield rebuild from WatchPost. 
 
 - `MAX_WORDS = 100` (was 80). Each of the three sections (WHAT HAPPENED, HOW SERIOUS, WHAT TO DO) gains one sentence.
 - New column `it_recommendation TEXT` (already added in Round 1 schema). Populated by a second AI call after the manager translation succeeds.
-- Obfuscation map (static dict, inlined in groq_translator.py): `192.168.100.40` → `Device-A`, port `3389` → `Port-X`, `mimikatz.exe` → `Tool-A`, `lsass.exe` → `System-Process-1`. Apply before sending to provider.
+- Obfuscation map (built per alert by `it_recommender._build_map`): every internal IPv4 found in the payload → `Device-A`, `Device-B`, …; the agent/device name → `Host-A`, `Host-B`, …; plus a static tail of port `3389` → `Port-X`, `mimikatz.exe` → `Tool-A`, `lsass.exe` → `System-Process-1`. Public addresses are deliberately left alone — an attacker's source IP is not ours to protect and the model needs it. Apply before sending to provider; substitution is anchored on whole tokens, never bare substrings.
 - IT recommendation rendered ONLY on the alert detail page, gated to `current_user.role == 'IT_ADMIN'`. NEVER included in any external notification (Telegram, email).
 
 ## Part 2 — Database schema (clean break, Round 1 — done)
