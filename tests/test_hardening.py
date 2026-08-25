@@ -377,3 +377,57 @@ def test_audit_csv_export_is_itself_audited(live_server, live_server_db):
     # The filter has to be in the row: "exported everything" and "exported one
     # user's actions" are different events.
     assert "row_count" in row[3] and '"actor": "admin"' in row[3], row[3]
+
+
+def test_api_path_denials_are_audited(live_server, live_server_db):
+    """role_required returns a JSON 403 for /api/* and /export* instead of
+    raising one, so those denials never reach errors._handle_forbidden.
+
+    They went unrecorded, which meant an attacker probing only the machine
+    surface generated no AUTHZ_DENIED rows and never tripped the probe sweep —
+    the half of the app a scripted attacker would reach for first.
+    """
+    import re
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    from werkzeug.security import generate_password_hash
+
+    username, password = "authz_probe_mgr", "Authz-Probe-Pass!2026"
+    conn = sqlite3.connect(live_server_db, timeout=10)
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO users "
+            "(username, password_hash, role, created_at, must_change_password) "
+            "VALUES (?, ?, 'MANAGER', ?, 0)",
+            (username, generate_password_hash(password),
+             datetime.now(tz=timezone(timedelta(hours=8))).isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    s = requests.Session()
+    csrf = re.search(r'name="_csrf" value="([^"]+)"',
+                     s.get(f"{live_server}/login").text).group(1)
+    assert s.post(f"{live_server}/login",
+                  data={"username": username, "password": password, "_csrf": csrf},
+                  allow_redirects=False).status_code == 302
+
+    # Machine paths: JSON 403 from the decorator, no abort(), no error handler.
+    for path in ("/api/agents", "/api/cache-stats", "/export.csv"):
+        r = s.get(f"{live_server}{path}", allow_redirects=False, timeout=10)
+        assert r.status_code == 403, (path, r.status_code)
+
+    conn = sqlite3.connect(live_server_db, timeout=10)
+    try:
+        rows = conn.execute(
+            "SELECT target FROM audit_log "
+            "WHERE action = 'AUTHZ_DENIED' AND actor = ?", (username,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(rows) >= 3, (
+        f"{len(rows)} AUTHZ_DENIED rows for 3 denied machine-path requests — "
+        "the probe sweep is blind to /api/* and /export*"
+    )

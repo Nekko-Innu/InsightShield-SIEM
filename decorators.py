@@ -118,6 +118,28 @@ def role_required(role: str):
                 getattr(current_user, "username", "?"), actual, role, request.path,
             )
             if _is_machine_path(request.path):
+                # Audited HERE, not in web/errors.py. This branch RETURNS a 403
+                # response rather than raising one, so it never reaches the
+                # error handler that records the HTML deny path — and the result
+                # was that an attacker probing only /api/* and /export* produced
+                # no AUTHZ_DENIED rows and never tripped the probe sweep in
+                # scheduler._authz_probe_sweep. That is the surface a scripted
+                # attacker picks first, so it was the wrong half to leave blind.
+                # The HTML path below stays audited by errors._handle_forbidden,
+                # which also catches 403s raised from outside this decorator —
+                # do not "tidy" the two into one without keeping that coverage.
+                # Imported locally: decorators sits below db in the import graph,
+                # and the cost only lands on a request that is already refused.
+                import db
+
+                db.log_audit(
+                    action="AUTHZ_DENIED",
+                    actor=getattr(current_user, "username", None),
+                    actor_role=getattr(current_user, "role", None),
+                    target=request.endpoint or request.path,
+                    ip=request.remote_addr,
+                    user_agent=request.headers.get("User-Agent", ""),
+                )
                 return jsonify({
                     "error":         "forbidden",
                     "required_role": normalize_role(role),
