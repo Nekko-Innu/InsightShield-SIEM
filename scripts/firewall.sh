@@ -34,7 +34,7 @@ command -v ufw >/dev/null || die "ufw not installed — apt install ufw (runbook
 
 # Scope by subnet, not by interface: interface names are unstable across
 # hypervisors, and the POS terminals are identified by network. Derived rather
-# than hardcoded so this does not become a fourth copy of 192.168.100.30.
+# than hardcoded so this does not become a fourth copy of 192.168.1.159.
 IFACE="$(ip -4 route show default | awk '{print $5; exit}')"
 [ -n "$IFACE" ] || die "no default route — configure the network first (runbook §1.2)"
 LAN_CIDR="${LAN_CIDR:-$(ip -4 route show dev "$IFACE" scope link | awk '{print $1; exit}')}"

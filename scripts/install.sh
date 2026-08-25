@@ -189,7 +189,7 @@ else
     -keyout /etc/nginx/ssl/insightshield.key \
     -out    /etc/nginx/ssl/insightshield.crt \
     -subj "/CN=insightshield.local" \
-    -addext "subjectAltName=DNS:insightshield.local,IP:192.168.100.30" \
+    -addext "subjectAltName=DNS:insightshield.local,IP:192.168.1.159" \
     >/dev/null 2>&1 \
     && { chmod 600 /etc/nginx/ssl/insightshield.key; pass "nginx: self-signed certificate generated"; } \
     || fail "nginx: certificate generation failed"

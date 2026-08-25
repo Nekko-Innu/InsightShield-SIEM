@@ -31,7 +31,7 @@ The only CSRF-exempt route in the app (`web/csrf.py`). It carries no browser ses
 |---|---|
 | `127.0.0.1` | Wazuh manager on the same host |
 | `::1` | same, IPv6 |
-| `192.168.100.30` | the Wazuh manager VM on the lab LAN |
+| `192.168.1.159` | the Wazuh manager VM on the lab LAN |
 
 Anything else gets `403 {"error": "Unauthorized"}`.
 
@@ -170,7 +170,7 @@ curl -sS -X POST http://127.0.0.1:5000/wazuh-webhook \
         "rule_level": 12,
         "device_name": "POS-TERMINAL-01",
         "description": "Multiple failed RDP logon attempts",
-        "data": {"srcip": "192.168.100.77"}
+        "data": {"srcip": "192.168.1.77"}
       }'
 ```
 

@@ -237,7 +237,10 @@ PERMANENT_SESSION_LIFETIME_MIN = int(
 )
 
 # ── Known Devices ────────────────────────────────────────────────────────────
-KNOWN_DEVICES = ["POS-TERMINAL-01", "MANAGER-PC-01"]
+# Fallback only — shown with status "unknown" when the Wazuh API is unreachable.
+# Names must match the agent names in the manager, or the dashboard shows two
+# sets of tiles for the same machines once the API comes back.
+KNOWN_DEVICES = ["wazuh-system", "Manager", "POSsys1", "POSsys2", "POSsys3"]
 
 # ── Severity Levels (ordered low → high) ─────────────────────────────────────
 SEVERITY_LEVELS = ["INFORMATIONAL", "LOW", "MEDIUM", "HIGH", "CRITICAL"]

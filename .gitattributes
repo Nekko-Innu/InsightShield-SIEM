@@ -11,3 +11,10 @@ wazuh_rules/custom-insightshield text eol=lf
 # Read by logrotate on the Ubuntu target. No extension to match on, and a
 # stray CR turns `weekly` into an unknown directive.
 logrotate/insightshield text eol=lf
+
+# systemd and nginx read these on the Ubuntu target. systemd keeps a trailing
+# CR inside a quoted value, so Environment="PLAYWRIGHT_BROWSERS_PATH=..." ends
+# up pointing at a path with a \r on the end and /report.pdf fails — while
+# healthcheck check 15 still passes, because the variable IS set.
+*.service text eol=lf
+*.conf text eol=lf

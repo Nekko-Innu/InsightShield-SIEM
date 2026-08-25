@@ -43,7 +43,7 @@ def wazuh_webhook():
     check below makes that loud before the first payload arrives.
     """
     # Security: only accept from Wazuh Manager (same VM)
-    allowed_ips = ["127.0.0.1", "::1", "192.168.100.30"]
+    allowed_ips = ["127.0.0.1", "::1", "192.168.1.159"]
     if request.remote_addr not in allowed_ips:
         logger.warning("Webhook rejected from unauthorized IP: %s", request.remote_addr)
         db.log_audit(

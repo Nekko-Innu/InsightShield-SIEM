@@ -334,14 +334,14 @@ if need_cmd ufw "the firewall checks"; then
   # 18. The two ports that must never face the LAN.
   #
   # Rule-based, not probe-based, and that is deliberate: a curl from this host
-  # to https://192.168.100.30:55000 is routed over lo, and ufw's before.rules
+  # to https://192.168.1.159:55000 is routed over lo, and ufw's before.rules
   # accept everything on lo unconditionally. The probe would succeed even when
   # the firewall is correctly blocking every POS terminal — a check that always
   # passes. What actually decides the outcome is the default policy plus the
   # absence of an ALLOW, so that is what gets asserted.
   #
   # For a real external probe, run this from a POS PC:
-  #     curl -m 3 -k https://192.168.100.30:55000     # must time out
+  #     curl -m 3 -k https://192.168.1.159:55000     # must time out
   if ufw status verbose 2>/dev/null | grep -q 'deny (incoming)' \
      && ! echo "$UFW_STATUS" | grep -E '^(55000|9200)/tcp' | grep -q ALLOW; then
     pass "ufw: 55000/9200 not reachable from the LAN"
@@ -376,19 +376,19 @@ if need_cmd timedatectl "the clock checks"; then
 fi
 
 # 20. The address itself. web/blueprints/webhook.py's allowlist, nginx's server_name and
-# the TLS certificate's SAN all hardcode 192.168.100.30 — so this check
+# the TLS certificate's SAN all hardcode 192.168.1.159 — so this check
 # hardcodes it too, on purpose. Changing the address means changing all four
 # (runbook §1.1).
-if ip -4 addr show scope global 2>/dev/null | grep -q 'inet 192\.168\.100\.30/'; then
-  pass "network: 192.168.100.30 configured"
+if ip -4 addr show scope global 2>/dev/null | grep -q 'inet 192\.168\.1\.159/'; then
+  pass "network: 192.168.1.159 configured"
 else
-  fail "network: 192.168.100.30 not on any interface — the webhook allowlist, nginx server_name and TLS SAN all assume it (runbook §1.1, §1.2)"
+  fail "network: 192.168.1.159 not on any interface — the webhook allowlist, nginx server_name and TLS SAN all assume it (runbook §1.1, §1.2)"
 fi
 
-if [ "$(getent hosts insightshield.local 2>/dev/null | awk '{print $1; exit}')" = 192.168.100.30 ]; then
-  pass "network: insightshield.local resolves to 192.168.100.30"
+if [ "$(getent hosts insightshield.local 2>/dev/null | awk '{print $1; exit}')" = 192.168.1.159 ]; then
+  pass "network: insightshield.local resolves to 192.168.1.159"
 else
-  fail "network: insightshield.local does not resolve to 192.168.100.30 — add it to /etc/hosts (runbook §1.2.4)"
+  fail "network: insightshield.local does not resolve to 192.168.1.159 — add it to /etc/hosts (runbook §1.2.4)"
 fi
 
 echo "==============================="
