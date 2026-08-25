@@ -8,7 +8,7 @@
 import json
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import config
 import db
@@ -73,9 +73,69 @@ def validate_payload(payload: dict) -> str | None:
         except (TypeError, ValueError):
             return "Invalid rule_level: expected an integer"
 
-    # Timestamp: use provided or generate
-    if "timestamp" not in payload:
+    # severity was taken verbatim while its two neighbours were bounded, and it
+    # is not a display string: alert_router dispatches on exact equality, so
+    # lower-case "critical" matched no branch and produced an alert that was
+    # stored and shown but notified nobody, while an inflated "CRITICAL" forced
+    # the full HIGH fan-out plus escalation enrolment. A dict reached
+    # conn.execute and 500'd the request.
+    if "severity" in payload:
+        severity = payload["severity"]
+        if not isinstance(severity, str):
+            return "Invalid severity: expected a string"
+        if severity.upper() not in config.SEVERITY_LEVELS:
+            return ("Invalid severity: expected one of "
+                    + ", ".join(config.SEVERITY_LEVELS))
+        payload["severity"] = severity.upper()
+
+    # attack_type and description reach the dashboard, the notification bodies
+    # and the AI prompt. Same treatment as device_name.
+    for field, limit in (("attack_type", 64), ("description", 512)):
+        if field in payload:
+            if not isinstance(payload[field], str):
+                return f"Invalid {field}: expected a string"
+            if len(payload[field]) > limit:
+                return f"Invalid {field}: at most {limit} characters"
+
+    # Timestamp: use provided or generate.
+    #
+    # It used to be accepted verbatim whenever present, and it is not a label —
+    # it is the ordering key and the predicate for the escalation sweep, the
+    # 24h breakdown, the health score and paging. A CRITICAL alert stamped
+    # 1970-01-01 fired its ingest notification and then sat permanently outside
+    # get_unacked_critical_alerts' lower bound, never escalating and never
+    # appearing in the 24h view; a far-future one pinned itself to page 1 and
+    # poisoned the mean-time-to-acknowledge with a negative response time.
+    supplied = payload.get("timestamp")
+    if supplied is None:
         payload["timestamp"] = datetime.now(tz=config.PHT).isoformat()
+    else:
+        if not isinstance(supplied, str):
+            return "Invalid timestamp: expected an ISO 8601 string"
+        try:
+            parsed = datetime.fromisoformat(supplied)
+        except ValueError:
+            return "Invalid timestamp: expected an ISO 8601 string"
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=config.PHT)
+        now = datetime.now(tz=config.PHT)
+        # Deliberately generous backwards: a manager that was down, or a queue
+        # that backed up, legitimately replays alerts hours or days late, and
+        # dropping those would lose real evidence to a clock check. Forward is
+        # tight, because there is no legitimate reason to report the future and
+        # a far-future stamp pins the row to page 1 permanently and drives
+        # response_time_s negative, poisoning the mean-time-to-acknowledge.
+        #
+        # ponytail: this bounds the absurd cases (1970, 2099), not ordering
+        # games inside the window — a backdate of 25 hours still lands outside
+        # the escalation sweep's own ESCALATION_MAX_AGE_H bound. Fixing that
+        # properly means storing an ingest time alongside the reported one and
+        # sweeping on it; upgrade there if backdating inside the window ever
+        # matters.
+        if not (now - timedelta(days=7)) <= parsed <= (now + timedelta(minutes=5)):
+            return ("Invalid timestamp: must be a recent ISO 8601 time, "
+                    "not in the future")
+        payload["timestamp"] = parsed.isoformat()
 
     return None
 

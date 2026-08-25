@@ -9,6 +9,7 @@ an empty Attack Trail on every detail page, and neither shows up until it is
 running in production.
 """
 import importlib.util
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -29,8 +30,13 @@ def integrator():
 @pytest.fixture
 def wazuh_alert():
     """The shape wazuh-integratord writes to the temp file it hands the script."""
+    # Built relative to now, not hardcoded. validate_payload bounds how old a
+    # reported timestamp may be, and a literal date here would start failing
+    # once the fixture aged past that window — which is a property of the
+    # fixture, not of the contract these tests exist to pin.
+    recent = (datetime.now(tz=timezone(timedelta(hours=8))) - timedelta(hours=1))
     return {
-        "timestamp": "2026-08-02T19:00:00.000+0800",
+        "timestamp": recent.strftime("%Y-%m-%dT%H:%M:%S.000%z"),
         "rule": {
             "level": 13,
             "description": "New service installed",
