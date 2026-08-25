@@ -684,3 +684,53 @@ def test_open_sse_stream_dies_when_the_session_is_revoked(
         "the stream outlived logout — session revocation does not reach an "
         "already-open response body"
     )
+
+
+# ── Webhook payload validation ───────────────────────────────────────────────
+
+def test_webhook_payload_validation_bounds_the_unbounded_fields():
+    """severity drives notification routing by exact string equality, and
+    timestamp is the predicate for the escalation sweep and every time window.
+    Both were taken verbatim while their neighbours were bounded."""
+    from datetime import datetime, timedelta
+
+    import config
+    from wazuh_receiver import validate_payload
+
+    base = {"rule_id": "5710", "device_name": "pc1", "rule_level": 10}
+    now = datetime.now(tz=config.PHT)
+
+    # Accepted and normalised, so route_alert's equality checks match.
+    ok = dict(base, severity="critical")
+    assert validate_payload(ok) is None
+    assert ok["severity"] == "CRITICAL", "severity was not normalised"
+
+    # A severity outside the vocabulary used to store fine and notify nobody.
+    assert validate_payload(dict(base, severity="PANIC")) is not None
+    assert validate_payload(dict(base, severity={"a": 1})) is not None
+
+    # Timestamps: absurd values rejected, recent and slightly-late accepted.
+    assert validate_payload(dict(base, timestamp="1970-01-01T00:00:00")) is not None
+    assert validate_payload(dict(base, timestamp="2099-01-01T00:00:00")) is not None
+    assert validate_payload(dict(base, timestamp="not-a-date")) is not None
+    assert validate_payload(dict(base, timestamp=12345)) is not None
+    for delta in (timedelta(minutes=1), timedelta(hours=6), timedelta(days=3)):
+        payload = dict(base, timestamp=(now - delta).isoformat())
+        assert validate_payload(payload) is None, f"rejected a {delta} old alert"
+
+    # Free-text fields are capped like device_name already was.
+    assert validate_payload(dict(base, attack_type="A" * 100)) is not None
+    assert validate_payload(dict(base, description="D" * 1000)) is not None
+    assert validate_payload(dict(base, attack_type="RDP Brute-force")) is None
+
+
+def test_ai_translation_cache_is_keyed_on_the_whole_prompt():
+    """Keying on rule_id alone let one crafted description decide what every
+    later alert with that rule id displayed for the full TTL."""
+    import inspect
+
+    import groq_translator
+
+    src = inspect.getsource(groq_translator)
+    assert 'cache_key=f"v2:{rule_id}"' not in src, "cache key is back to rule_id only"
+    assert "hashlib.sha256(prompt" in src, "cache key no longer covers the prompt"

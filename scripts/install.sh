@@ -78,10 +78,23 @@ install -d -o "$SVC_USER" -g "$SVC_USER" "$LOG_DIR" \
 
 chown -R "$SVC_USER":"$SVC_USER" "$APP_ROOT"
 # nginx (www-data) serves /static/ straight off disk, so it needs traverse on
-# the parents and read on the tree. Everything else stays owner-only.
+# the parents and read on the tree.
 chmod o+x "$APP_ROOT" "$APP"
 chmod -R o+rX "$APP/static"
-pass "dirs: ownership and nginx traverse bits set"
+
+# "Everything else stays owner-only" was a claim, not a control: nothing here
+# enforced it and nothing set a umask, so sqlite created insightshield.db at
+# 0644 and the RotatingFileHandler created insightshield.log at 0644 -- inside
+# a tree just made world-traversable above. Any local account could read the
+# users table (password hashes), the whole audit log, and a log file that has
+# carried a Telegram bot token. Strip the world bits from everything that is
+# not the static tree, and set UMask in the units so new files stay that way.
+chmod -R o-rwx "$APP_ROOT/backups" 2>/dev/null || true
+chmod -R o-rwx "$LOG_DIR" 2>/dev/null || true
+find "$APP" -path "$APP/static" -prune -o -type f -exec chmod o-rwx {} + 2>/dev/null || true
+find "$APP" -path "$APP/static" -prune -o -type d -exec chmod o-rw {} + 2>/dev/null || true
+chmod o+x "$APP_ROOT" "$APP"
+pass "dirs: ownership, nginx traverse bits, world bits stripped"
 
 # ── 3. Virtualenv ────────────────────────────────────────────────────────────
 
