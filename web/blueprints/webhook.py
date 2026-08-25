@@ -90,7 +90,10 @@ def wazuh_webhook():
 
     # nginx caps bodies at 1m, but the E2E suite and any direct-to-Flask
     # deployment bypass nginx entirely.
-    if request.content_length and request.content_length > 256_000:
+    # Explicitly `is not None`: a chunked request reports None here, and the
+    # truthiness test this used to be short-circuited straight past the cap.
+    # app.config["MAX_CONTENT_LENGTH"] is the backstop that catches that case.
+    if request.content_length is not None and request.content_length > 256_000:
         return jsonify({"error": "Payload too large"}), 413
 
     payload = request.get_json(silent=True)

@@ -208,7 +208,14 @@ def _call_openai_compat(provider: dict, prompt: str, timeout_s: float = 30.0) ->
         "temperature": 0.3,
         "max_tokens": 200,
     }
-    r = requests.post(provider["base_url"], headers=headers, json=body, timeout=timeout_s)
+    # allow_redirects=False is load-bearing. _reject_unsafe_base_url validates
+    # the hostname that was typed, and requests then follows redirects by
+    # default — so https://attacker.tld/ passes the check and 302s to
+    # 169.254.169.254 or 127.0.0.1. requests strips Authorization across a host
+    # change but NOT custom headers, and both shipped provider templates use
+    # x-api-key / x-goog-api-key, so the key would ride along to the target.
+    r = requests.post(provider["base_url"], headers=headers, json=body,
+                      timeout=timeout_s, allow_redirects=False)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"].strip()
 

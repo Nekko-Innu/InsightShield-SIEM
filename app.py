@@ -133,6 +133,13 @@ def _configure(app: Flask) -> None:
     # extra hop trusted is one an attacker can forge.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
+    # Framework-level cap, enforced as the stream is read — so it also covers
+    # Transfer-Encoding: chunked, where request.content_length is None and every
+    # hand-rolled `if request.content_length > N` check silently short-circuits.
+    # nginx caps bodies at 1m; this is the same ceiling for the direct-to-Flask
+    # and direct-to-gunicorn deployments that never pass through it.
+    app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
+
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(
         minutes=config.PERMANENT_SESSION_LIFETIME_MIN
     )

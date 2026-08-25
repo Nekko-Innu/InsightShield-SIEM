@@ -417,6 +417,18 @@ def admin_settings_set_setting(key):
     if key not in _SETTINGS_WRITE_ALLOWLIST:
         abort(404)
     value = request.form.get("value") or ""
+    # The AI provider base_url has been validated since it shipped; this field
+    # is the same shape of hazard and had nothing. wazuh_api.py sends
+    # auth=(user, password) to whatever this holds, and the 30-second agent
+    # poller repeats it forever with no further interaction — so pointing it at
+    # an attacker host exfiltrates the Wazuh credentials continuously, and at
+    # 127.0.0.1 or a metadata endpoint it is a plain SSRF primitive.
+    if key == "wazuh_api_url" and value:
+        rejected = _reject_unsafe_base_url(value)
+        if rejected:
+            flash(rejected, "error")
+            return redirect(
+                url_for("admin_settings.admin_settings", tab="service"))
     db.set_setting(key, value)
     _request_cache.invalidate_request_cache()
     db.log_audit(

@@ -12,6 +12,7 @@
 # fails or returns invalid output. They never raise. The chain runner
 # returns AI_CHAIN_EXHAUSTED in that case and we substitute the template.
 
+import hashlib
 import logging
 
 import config
@@ -145,11 +146,16 @@ def translate(
         validator_fn=validator.validate_manager_translation,
         cache_get=cache.get_cached,
         cache_set=cache.set_cached,
-        # v2: the pre-fix prompt baked the real device name into the model's
-        # reply, so entries cached under a bare rule_id served the wrong
-        # machine's name to the next device. The key is versioned so entries
-        # written by the old prompt are never read back.
-        cache_key=f"v2:{rule_id}",
+        # Versioned so entries written by an older prompt are never read back
+        # (v2 fixed a prompt that baked the real device name into the reply).
+        # v3: keyed on the PROMPT, not the rule id. The prompt embeds the
+        # alert description, which arrives from the webhook, so keying on
+        # rule_id alone meant the first description seen for a rule decided
+        # what every later alert with that rule id displayed for the whole TTL
+        # — a single crafted ingest could put chosen text on the dashboard, in
+        # the Telegram and email bodies and in the CSV export for an hour.
+        # it_recommender.py already hashes its full prompt; this matches it.
+        cache_key="v3:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         # This runs inside the /wazuh-webhook POST, and the Wazuh integrator
         # gives up at TIMEOUT_S=10 (wazuh_rules/custom-insightshield.py) — with
         # notification routing still to come in the same request. Persisting the
