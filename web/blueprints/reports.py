@@ -32,15 +32,26 @@ def _clamp_report_range(date_from: str, date_to: str) -> tuple[str, str, bool]:
     narrows a range it fully understands.
     """
     fmt = "%Y-%m-%d"
+    max_days = config.REPORT_MAX_RANGE_DAYS
     try:
         start = datetime.strptime(date_from, fmt)
         end = datetime.strptime(date_to, fmt)
     except (TypeError, ValueError):
-        return date_from, date_to, False
+        # Unparseable input is clamped to the default window, NOT passed
+        # through. It used to be returned untouched on the reasoning that the
+        # DB layer treats it as a plain string — but that is exactly why it was
+        # dangerous: get_alerts_by_date_range builds "{date_from}T00:00:00" and
+        # compares lexicographically, so `?from=0&to=9` selects every row ever
+        # stored ('2026-…' sorts between '0' and '9'). That turned the one
+        # control meant to bound this query into a no-op for any input the
+        # parser rejects, and /report is reachable by a manager with no rate
+        # limit, reading every raw_alert blob into memory.
+        end = datetime.now()
+        start = end - timedelta(days=max_days)
+        return start.strftime(fmt), end.strftime(fmt), True
 
     if end < start:
         start, end = end, start
-    max_days = config.REPORT_MAX_RANGE_DAYS
     if (end - start).days <= max_days:
         return start.strftime(fmt), end.strftime(fmt), False
     return (end - timedelta(days=max_days)).strftime(fmt), end.strftime(fmt), True

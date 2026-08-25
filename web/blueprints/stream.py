@@ -72,6 +72,11 @@ def api_events_stream():
     from flask import stream_with_context
 
     username = current_user.username
+    # Snapshotted at connect so the generator can notice a revocation later.
+    # The generator authenticates exactly once, when the response is created;
+    # Flask-Login's user_loader never runs again for an open response body, so
+    # without this the stream outlived logout by up to SSE_MAX_STREAM_SECONDS.
+    opened_epoch = (db.get_user(username) or {}).get("session_epoch", 0)
     with _sse_lock:
         if _sse_conns.get(username, 0) >= SSE_MAX_PER_USER:
             return jsonify({"error": "too_many_streams"}), 429
@@ -100,6 +105,22 @@ def api_events_stream():
                 # Jitter keeps a poolful of streams from phase-locking into a
                 # query herd every SSE_POLL_SECONDS.
                 _time.sleep(SSE_POLL_SECONDS + _random.uniform(0, 0.5))
+
+                # Revocation check, once per tick. bump_session_epoch (logout,
+                # and password change through the hash) invalidates COOKIES,
+                # and load_user only runs on a new request — an already-open
+                # response body is never revisited. So an attacker on a
+                # hijacked session could open this stream, go quiet, and keep
+                # receiving every rendered alert row for the full 30 minutes
+                # AFTER the victim logged out, defeating the exact primitive
+                # session_epoch exists to provide. One extra indexed read per
+                # tick, on a loop that is already querying.
+                current = db.get_user(username)
+                if not current or current.get("session_epoch", 0) != opened_epoch:
+                    logger.info(
+                        "SSE closed for %s: session revoked mid-stream", username
+                    )
+                    return
 
                 latest_id, status_ts = db.get_stream_watermark(status_key)
 
