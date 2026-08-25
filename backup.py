@@ -65,7 +65,10 @@ def backup_db(target_dir: Path | str = DEFAULT_BACKUP_DIR) -> Path:
 
         # Step 2: encrypt the snapshot bytes with the master Fernet key.
         plaintext = tmp_path.read_bytes()
-        fernet = crypto_utils.get_master_key()
+        # Snapshot key, which falls back to ENCRYPTION_KEY when
+        # BACKUP_ENCRYPTION_KEY is unset — so existing .db.enc files restore
+        # unchanged, and separating the two is opt-in.
+        fernet = crypto_utils.get_backup_key()
         ciphertext = fernet.encrypt(plaintext)
         final_target.write_bytes(ciphertext)
     finally:
@@ -110,7 +113,8 @@ def list_backups(target_dir: Path | str = DEFAULT_BACKUP_DIR) -> list[dict]:
     return rows
 
 
-def restore_db(backup_path: Path | str, db_path: Path | str = dbmod.DB_PATH) -> bool:
+def restore_db(backup_path: Path | str, db_path: Path | str = dbmod.DB_PATH,
+               allow_plaintext: bool = False) -> bool:
     """
     Restore insightshield.db from <backup_path>. Overwrites the current DB file.
     Caller should stop the Flask app first so no open connections corrupt the
@@ -138,7 +142,7 @@ def restore_db(backup_path: Path | str, db_path: Path | str = dbmod.DB_PATH) -> 
         # Encrypted snapshot — decrypt with master key, write plaintext to db_path.
         try:
             ciphertext = backup_path.read_bytes()
-            fernet = crypto_utils.get_master_key()
+            fernet = crypto_utils.get_backup_key()
             plaintext = fernet.decrypt(ciphertext)
         except Exception as e:
             logger.error("Restore failed: decryption error on %s (%s)",
@@ -151,8 +155,31 @@ def restore_db(backup_path: Path | str, db_path: Path | str = dbmod.DB_PATH) -> 
         )
     else:
         # Legacy plaintext snapshot — direct copy (pre-encryption commit).
+        #
+        # The .enc branch above gets authenticity for free: Fernet is
+        # authenticated encryption, so a tampered file fails to decrypt. This
+        # branch has no signature, no schema check, not even a SQLite header
+        # check — it will copy whatever it is handed over the live database,
+        # and the database defines the users table and every role. Anyone who
+        # can write a file into backups/ could therefore choose the contents of
+        # the next restore, and list_backups() offers .db files alongside .enc
+        # ones with nothing in the UI distinguishing them.
+        #
+        # Kept rather than deleted, because a genuine pre-encryption snapshot
+        # is still a real recovery path — but it now has to be asked for
+        # explicitly, so it cannot be reached by following the UI's own
+        # instructions with a planted filename.
+        if not allow_plaintext:
+            logger.error(
+                "Refusing to restore unencrypted %s: a plaintext snapshot "
+                "carries no integrity protection, so its contents cannot be "
+                "distinguished from a planted file. Re-run with "
+                "--allow-plaintext if this really is your own pre-encryption "
+                "backup.", backup_path,
+            )
+            return False
         shutil.copy2(backup_path, db_path)
-        logger.warning("Database restored from plaintext %s -> %s",
+        logger.warning("Database restored from UNVERIFIED plaintext %s -> %s",
                        backup_path, db_path)
     return True
 
@@ -199,7 +226,9 @@ def _cli_main(argv: list[str]) -> int:
             print(f"{r['mtime']}  {r['size_bytes']:>10} bytes  {r['name']}")
         return 0
     if argv[0] == "restore" and len(argv) >= 2:
-        ok = restore_db(argv[1])
+        allow_plaintext = "--allow-plaintext" in argv[2:]
+        target = argv[1]
+        ok = restore_db(target, allow_plaintext=allow_plaintext)
         return 0 if ok else 1
     if argv[0] == "prune":
         keep = int(argv[1]) if len(argv) >= 2 else DEFAULT_KEEP
@@ -207,7 +236,8 @@ def _cli_main(argv: list[str]) -> int:
         print(f"Pruned {removed} old backup(s), keeping newest {keep}.")
         return 0
 
-    print("Usage: python -m backup [run|list|restore <path>|prune [keep]]")
+    print("Usage: python -m backup [run|list|restore <path> "
+          "[--allow-plaintext]|prune [keep]]")
     return 2
 
 

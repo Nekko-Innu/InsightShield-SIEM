@@ -359,12 +359,21 @@ def _kick_it_recommendation(
     has already returned 200 OK by the time this runs. Round 4's SSE will
     surface a "rec failed, click to retry" UI for the silent-error case.
     """
+    # Bracketed by a start and a terminal line. This is a daemon thread, so a
+    # worker shutdown kills it outright — no exception, no finally, nothing to
+    # log from. Previously that left it_recommendation NULL with no record that
+    # it had ever been attempted, indistinguishable from an alert nobody asked
+    # about. A start line with no matching "complete" or "failed" is now the
+    # signal that the process went away mid-generation.
+    logger.info("IT recommendation start (alert_id=%s)", alert_id)
     try:
         text, provider = it_recommender.recommend(rule_id, raw_alert_json, device_name)
         db.update_it_recommendation(alert_id, text, provider_used=provider)
+        logger.info("IT recommendation complete (alert_id=%s provider=%s)",
+                    alert_id, provider)
     except Exception as e:
         logger.error(
-            "IT recommendation generation failed (alert_id=%s): %s",
+            "IT recommendation failed (alert_id=%s): %s",
             alert_id, e,
         )
 

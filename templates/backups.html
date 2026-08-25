@@ -41,6 +41,9 @@
         <tr>
           <th class="text-left px-4 py-2 font-semibold">Filename</th>
           <th class="text-left px-4 py-2 font-semibold">Created (PHT)</th>
+          {# list_backups() has always reported this and the table never showed
+             it, so a planted plaintext .db appeared as an ordinary backup. #}
+          <th class="text-left px-4 py-2 font-semibold">Integrity</th>
           <th class="text-right px-4 py-2 font-semibold">Size</th>
           <th class="text-right px-4 py-2 font-semibold">Download</th>
         </tr>
@@ -50,6 +53,13 @@
         <tr class="border-t border-surface-200">
           <td class="px-4 py-2 font-mono text-slate-800">{{ b.name }}</td>
           <td class="px-4 py-2 text-slate-700">{{ b.mtime }}</td>
+          <td class="px-4 py-2">
+            {% if b.encrypted %}
+              <span class="text-emerald-700 font-semibold">Encrypted</span>
+            {% else %}
+              <span class="text-amber-700 font-semibold">Plaintext — unverified</span>
+            {% endif %}
+          </td>
           <td class="px-4 py-2 text-right text-slate-700">{{ '{:,}'.format(b.size_bytes) }} B</td>
           <td class="px-4 py-2 text-right">
             <a href="{{ url_for('admin_ops.admin_backup_download', name=b.name) }}"
@@ -67,6 +77,10 @@
 
   <div class="bg-amber-50 border border-amber-200 rounded-md px-4 py-3 text-sm text-amber-800">
     <strong>Restoring</strong> a backup must be done from the server shell (Flask must be stopped first) using
-    <code>python -m backup restore backups/&lt;filename&gt;.db</code>.
+    <code>python -m backup restore backups/&lt;filename&gt;.db.enc</code>.
+    Encrypted snapshots are integrity-checked on restore. A row marked
+    <em>Plaintext — unverified</em> is not, and restoring one needs an explicit
+    <code>--allow-plaintext</code> — its contents cannot be told apart from a
+    planted file.
   </div>
 </section>

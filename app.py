@@ -131,7 +131,15 @@ def _configure(app: Flask) -> None:
     # from five failed attempts by anybody), and every audit_log.ip row.
     # x_for=1 means "trust exactly one proxy hop" — nginx. Do not raise it; each
     # extra hop trusted is one an attacker can forge.
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    #
+    # x_host is deliberately NOT set. nginx sends Host, X-Real-IP,
+    # X-Forwarded-For and X-Forwarded-Proto — never X-Forwarded-Host — so
+    # trusting that header meant taking it straight from the client and
+    # overwriting HTTP_HOST with it. request.host_url became request-controlled,
+    # and safe_referrer() compares the referrer against exactly that value, so
+    # its same-origin test could be talked into accepting an off-host referrer.
+    # config.REPORT_ASSET_BASE_URL is pinned for the same reason.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
     # Framework-level cap, enforced as the stream is read — so it also covers
     # Transfer-Encoding: chunked, where request.content_length is None and every

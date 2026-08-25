@@ -8,6 +8,7 @@ the proxy would have passed against the broken build.
 """
 import pathlib
 
+import pytest
 import requests
 from cryptography.fernet import Fernet
 
@@ -734,3 +735,88 @@ def test_ai_translation_cache_is_keyed_on_the_whole_prompt():
     src = inspect.getsource(groq_translator)
     assert 'cache_key=f"v2:{rule_id}"' not in src, "cache key is back to rule_id only"
     assert "hashlib.sha256(prompt" in src, "cache key no longer covers the prompt"
+
+
+# ── Key separation and rotation ─────────────────────────────────────────────
+
+def test_encryption_key_rotation_and_backup_key_separation(monkeypatch):
+    """One key covered both the credential store and every database snapshot,
+    with no rotation path — so a single disclosure opened every credential the
+    system had ever held plus every historical copy of it."""
+    import importlib
+
+    from cryptography.fernet import Fernet
+
+    import crypto_utils
+
+    k_old = Fernet.generate_key().decode()
+    k_new = Fernet.generate_key().decode()
+    k_backup = Fernet.generate_key().decode()
+
+    def reload_with(**env):
+        for name in ("ENCRYPTION_KEY", "ENCRYPTION_KEY_OLD",
+                     "BACKUP_ENCRYPTION_KEY", "BACKUP_ENCRYPTION_KEY_OLD"):
+            monkeypatch.delenv(name, raising=False)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        return importlib.reload(crypto_utils)
+
+    # Baseline: an existing install with one key round-trips as before.
+    cu = reload_with(ENCRYPTION_KEY=k_old)
+    token = cu.encrypt_value("groq-secret-abc")
+    assert cu.decrypt_value(token) == "groq-secret-abc"
+
+    # Mid-rotation: the old token still reads, new writes use the new key.
+    cu = reload_with(ENCRYPTION_KEY=k_new, ENCRYPTION_KEY_OLD=k_old)
+    assert cu.decrypt_value(token) == "groq-secret-abc"
+    fresh = cu.encrypt_value("written-after-rotation")
+    assert cu.decrypt_value(fresh) == "written-after-rotation"
+
+    # Rotation finished: dropping _OLD must fail the pre-rotation token closed.
+    # Without this the "rotation" would just be accepting everything forever.
+    cu = reload_with(ENCRYPTION_KEY=k_new)
+    assert cu.decrypt_value(token) is None
+    assert cu.decrypt_value(fresh) == "written-after-rotation"
+
+    # Backups fall back to ENCRYPTION_KEY, so existing .db.enc files restore.
+    cu = reload_with(ENCRYPTION_KEY=k_new)
+    snapshot = cu.get_backup_key().encrypt(b"snapshot")
+    assert cu.get_master_key().decrypt(snapshot) == b"snapshot"
+
+    # Set separately, the app key can no longer open a snapshot.
+    cu = reload_with(ENCRYPTION_KEY=k_new, BACKUP_ENCRYPTION_KEY=k_backup)
+    separated = cu.get_backup_key().encrypt(b"snapshot2")
+    with pytest.raises(Exception):
+        cu.get_master_key().decrypt(separated)
+
+    reload_with(ENCRYPTION_KEY=k_new)
+
+
+def test_plaintext_backup_restore_requires_an_explicit_flag(tmp_path):
+    """The .db.enc path is authenticated by Fernet; the legacy plaintext branch
+    had no signature, no schema check, not even a SQLite header check — it
+    copied whatever it was handed over the live database, and the database
+    defines the users table and every role."""
+    import sqlite3
+
+    import backup as backup_mod
+
+    planted = tmp_path / "insightshield-planted.db"
+    conn = sqlite3.connect(planted)
+    conn.execute("CREATE TABLE users (username TEXT)")
+    conn.execute("INSERT INTO users VALUES ('attacker')")
+    conn.commit()
+    conn.close()
+
+    target = tmp_path / "live.db"
+    target.write_bytes(b"original database contents")
+
+    assert backup_mod.restore_db(planted, db_path=target) is False, (
+        "an unverified plaintext snapshot was restored without being asked for"
+    )
+    assert target.read_bytes() == b"original database contents"
+
+    # Still available for a genuine pre-encryption snapshot, on request.
+    assert backup_mod.restore_db(planted, db_path=target,
+                                 allow_plaintext=True) is True
+    assert target.read_bytes() != b"original database contents"
