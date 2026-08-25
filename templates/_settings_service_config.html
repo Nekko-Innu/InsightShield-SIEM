@@ -203,7 +203,7 @@
         </button>
       </form>
       {# Delete #}
-      <form method="post" action="{{ url_for('admin_settings.admin_settings_provider_delete', provider_id=p.id) }}" class="inline" onsubmit="return confirm('Delete provider ' + {{ p.label | tojson }} + '?')">
+      <form method="post" action="{{ url_for('admin_settings.admin_settings_provider_delete', provider_id=p.id) }}" class="inline" data-confirm="Delete provider {{ p.label }}?">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <button type="submit" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50" title="Delete provider">
           {{ icon("trash", "w-4 h-4") }}

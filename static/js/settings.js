@@ -335,4 +335,25 @@
       if (labelInput && !labelInput.value) labelInput.value = tplSelect.value;
     });
   }
+
+  // Confirm-before-submit, driven by a data attribute rather than an inline
+  // onsubmit that interpolates the value.
+  //
+  // The provider delete button used to build its message with
+  // {{ p.label | tojson }} inside a double-quoted onsubmit. Jinja's tojson
+  // escapes < > & and ' but NOT ", so the JSON string's own quote closed the
+  // attribute and everything after it parsed as new attributes on the form --
+  // a label of `x onmouseover=alert(1) y` became a live event handler, which
+  // script-src 'unsafe-inline' happily runs, next to a CSRF token sitting in a
+  // readable meta tag. It also meant the dialog never actually worked: the
+  // handler was a syntax error for every label, valid or not.
+  //
+  // data-confirm goes through normal attribute autoescaping, where " becomes
+  // &#34;, and the value reaches JS as text that is never parsed as code.
+  document.addEventListener("submit", (e) => {
+    const form = e.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    const message = form.dataset.confirm;
+    if (message && !window.confirm(message)) e.preventDefault();
+  });
 })();
