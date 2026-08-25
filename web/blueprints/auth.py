@@ -43,28 +43,77 @@ _THROTTLE_USER_WINDOW_MIN = 60
 _THROTTLE_ESCALATE_LIMIT      = 20
 _THROTTLE_ESCALATE_WINDOW_MIN = 60
 
-def _check_login_throttle(ip: str | None, username: str | None) -> int | None:
-    """Return retry-after seconds if the login should be blocked; else None.
+def _check_ip_throttle(ip: str | None) -> int | None:
+    """Retry-after seconds if this SOURCE has failed too often; else None.
 
-    Per-IP fires first (catches the common case of a single attacker host),
-    falling through to per-username (catches IP-rotated attacks against one
-    account). Returning the WINDOW length as retry-after is conservative —
-    the actual quiet time is shorter (oldest failure rolls out of the
-    window earlier), but precision isn't worth the SQL overhead here.
+    Applied before verify_password, so a hammering host does not get to spend
+    our password-hash budget. Keyed on the address the attacker actually
+    occupies, so blocking it costs them something and costs nobody else
+    anything. Returning the WINDOW length is conservative — the real quiet time
+    is shorter as the oldest failure rolls out — but precision is not worth the
+    SQL here.
     """
-    if ip:
-        ip_failures = db.failed_logins_in_window(
-            ip=ip, since_minutes=_THROTTLE_IP_WINDOW_MIN
-        )
-        if ip_failures >= _THROTTLE_IP_LIMIT:
-            return _THROTTLE_IP_WINDOW_MIN * 60
-    if username:
-        user_failures = db.failed_logins_in_window(
-            username=username, since_minutes=_THROTTLE_USER_WINDOW_MIN
-        )
-        if user_failures >= _THROTTLE_USER_LIMIT:
-            return _THROTTLE_USER_WINDOW_MIN * 60
+    if not ip:
+        return None
+    if db.failed_logins_in_window(
+        ip=ip, since_minutes=_THROTTLE_IP_WINDOW_MIN
+    ) >= _THROTTLE_IP_LIMIT:
+        return _THROTTLE_IP_WINDOW_MIN * 60
     return None
+
+
+def _username_throttle_tripped(username: str | None) -> int | None:
+    """Retry-after seconds if this ACCOUNT has failed too often; else None.
+
+    Consulted ONLY after a password check has already failed. It used to run
+    before verify_password, alongside the per-IP check, and that was an
+    unauthenticated account-lockout: the counter keys on the SUBMITTED
+    username, so ten failed POSTs of `username=admin` from a couple of rotating
+    addresses refused the real holder of the password from every location for
+    an hour. Nothing reset it on a successful login and there is no unlock in
+    the UI, so ten requests an hour held the only IT_ADMIN account shut
+    indefinitely — while this same app paged that admin about the attack they
+    could no longer log in to triage.
+
+    Checking it after the password means a correct credential is never
+    refused, which costs nothing defensively: someone who supplies the right
+    password is not the brute-force attempt this counter exists to slow. Wrong
+    guesses against a hot account still get the 429, so IP-rotated guessing is
+    still answered, and the per-IP block above still bounds the hash cost.
+    """
+    if not username:
+        return None
+    if db.failed_logins_in_window(
+        username=username, since_minutes=_THROTTLE_USER_WINDOW_MIN
+    ) >= _THROTTLE_USER_LIMIT:
+        return _THROTTLE_USER_WINDOW_MIN * 60
+    return None
+
+
+def _throttled_login_response(username: str | None, retry_after: int, scope: str):
+    """The 429 both throttle paths return. Flash category 'throttle' is what
+    login.html renders with a clock icon."""
+    flash(
+        f"Too many attempts. Try again in {humanize_seconds(retry_after)}.",
+        "throttle",
+    )
+    logger.warning(
+        "Login throttle trip (%s): ip=%s username=%s retry_after=%ds",
+        scope, request.remote_addr, username, retry_after,
+    )
+    db.log_audit(
+        action="LOGIN_THROTTLED",
+        actor=username or "anonymous",
+        ip=request.remote_addr,
+        user_agent=request.headers.get("User-Agent", ""),
+        details=f"scope={scope} retry_after_s={retry_after}",
+    )
+    resp = make_response(
+        render_template("login.html", known_devices=config.KNOWN_DEVICES),
+        429,
+    )
+    resp.headers["Retry-After"] = str(retry_after)
+    return resp
 
 def _maybe_dispatch_brute_force_alert(ip: str | None, count: int) -> None:
     """Emit a credential_brute_force HIGH alert if not already emitted for
@@ -104,32 +153,14 @@ def login():
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
-        # Round E (§11.1a) — throttle pre-check. Runs before verify_password so
-        # bcrypt cost isn't paid for blocked actors; flash uses the new
-        # 'throttle' category so login.html can render it with a clock icon.
-        retry_after = _check_login_throttle(request.remote_addr, username)
+        # Round E (§11.1a) — per-SOURCE throttle, before verify_password so the
+        # password-hash cost is not paid for a host that is already blocked.
+        # The per-ACCOUNT counter deliberately does NOT run here; see
+        # _username_throttle_tripped for why checking it before the password
+        # was an unauthenticated lockout of the only admin account.
+        retry_after = _check_ip_throttle(request.remote_addr)
         if retry_after is not None:
-            flash(
-                f"Too many attempts. Try again in {humanize_seconds(retry_after)}.",
-                "throttle",
-            )
-            logger.warning(
-                "Login throttle trip: ip=%s username=%s retry_after=%ds",
-                request.remote_addr, username, retry_after,
-            )
-            db.log_audit(
-                action="LOGIN_THROTTLED",
-                actor=username or "anonymous",
-                ip=request.remote_addr,
-                user_agent=request.headers.get("User-Agent", ""),
-                details=f"retry_after_s={retry_after}",
-            )
-            resp = make_response(
-                render_template("login.html", known_devices=config.KNOWN_DEVICES),
-                429,
-            )
-            resp.headers["Retry-After"] = str(retry_after)
-            return resp
+            return _throttled_login_response(username, retry_after, "ip")
 
         user_data = db.verify_password(username, password)
         if user_data:
@@ -166,7 +197,6 @@ def login():
                 return redirect(url_for("auth.change_password"))
             return redirect_to_dashboard()
         else:
-            flash("Invalid credentials. Please try again.", "error")
             logger.warning("Failed login attempt: username=%s", username)
             db.log_audit(
                 action="LOGIN_FAILURE",
@@ -186,6 +216,16 @@ def login():
                 _maybe_dispatch_brute_force_alert(
                     request.remote_addr, escalation_count
                 )
+
+            # Per-ACCOUNT throttle, consulted only now that this attempt has
+            # already been rejected on its own merits. Answers IP-rotated
+            # guessing against one account without ever refusing someone who
+            # supplied the right password.
+            user_retry = _username_throttle_tripped(username)
+            if user_retry is not None:
+                return _throttled_login_response(username, user_retry, "username")
+
+            flash("Invalid credentials. Please try again.", "error")
 
     return render_template("login.html", known_devices=config.KNOWN_DEVICES)
 
@@ -244,8 +284,47 @@ def change_password():
         new_pw     = request.form.get("new_password", "")
         confirm_pw = request.form.get("confirm_password", "")
 
+        # Same source throttle as /login. This route calls verify_password too,
+        # and used to do it with no throttle, no failure row and no escalation
+        # check — so an attacker holding a hijacked session could guess the real
+        # password here, one request at a time, against the one authenticated
+        # endpoint nothing was watching, and convert a 30-minute window into
+        # permanent access. The generic "POST /account/password" audit row is
+        # byte-identical for a wrong guess and a real rotation, so the Audit tab
+        # could not tell 25 guesses from 25 changes either.
+        retry_after = _check_ip_throttle(request.remote_addr)
+        if retry_after is not None:
+            flash(
+                f"Too many attempts. Try again in {humanize_seconds(retry_after)}.",
+                "throttle",
+            )
+            resp = make_response(render_template("password_change.html"), 429)
+            resp.headers["Retry-After"] = str(retry_after)
+            return resp
+
         if db.verify_password(current_user.username, current_pw) is None:
             flash("Current password is incorrect.", "error")
+            logger.warning("Failed password-change attempt: username=%s",
+                           current_user.username)
+            # LOGIN_FAILURE, not a bespoke action: this is a password guess, and
+            # recording it as one puts it in front of the throttle, the
+            # brute-force escalation and the audit view that already exist.
+            db.log_audit(
+                action="LOGIN_FAILURE",
+                actor=current_user.username,
+                actor_role=current_user.role,
+                ip=request.remote_addr,
+                user_agent=request.headers.get("User-Agent", ""),
+                details="source=account_password_change",
+            )
+            escalation_count = db.failed_logins_in_window(
+                ip=request.remote_addr,
+                since_minutes=_THROTTLE_ESCALATE_WINDOW_MIN,
+            )
+            if escalation_count >= _THROTTLE_ESCALATE_LIMIT:
+                _maybe_dispatch_brute_force_alert(
+                    request.remote_addr, escalation_count
+                )
             return render_template("password_change.html")
 
         if len(new_pw) < 10:

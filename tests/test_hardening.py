@@ -431,3 +431,256 @@ def test_api_path_denials_are_audited(live_server, live_server_db):
         f"{len(rows)} AUTHZ_DENIED rows for 3 denied machine-path requests — "
         "the probe sweep is blind to /api/* and /export*"
     )
+
+
+# ── Login throttle: must stop guessing without locking the owner out ─────────
+
+def _make_user(db_path, username, password, role="IT_ADMIN"):
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    from werkzeug.security import generate_password_hash
+
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO users "
+            "(username, password_hash, role, created_at, must_change_password) "
+            "VALUES (?, ?, ?, ?, 0)",
+            (username, generate_password_hash(password), role,
+             datetime.now(tz=timezone(timedelta(hours=8))).isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _seed_failures(db_path, username, n, ip):
+    """Deposit n LOGIN_FAILURE rows as an attacker on OTHER addresses would."""
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        now = datetime.now(tz=timezone(timedelta(hours=8))).isoformat()
+        conn.executemany(
+            "INSERT INTO audit_log (ts, actor, action, ip) VALUES (?, ?, ?, ?)",
+            [(now, username, "LOGIN_FAILURE", f"{ip}{i}") for i in range(n)],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_account_cannot_be_locked_out_by_failures_from_other_sources(
+        live_server, live_server_db):
+    """Checking the per-username counter BEFORE the password was an
+    unauthenticated lockout: anyone could deposit failures against `admin` from
+    rotating addresses and refuse the real holder of the password everywhere,
+    for an hour, with no unlock path — while the app paged that same admin
+    about the attack."""
+    import re
+
+    username, password = "lockout_probe", "Lockout-Probe-Pass!2026"
+    _make_user(live_server_db, username, password)
+    # Well past _THROTTLE_USER_LIMIT (10), each from a different address so the
+    # per-IP block is not what is being tested.
+    _seed_failures(live_server_db, username, 15, ip="198.51.100.")
+
+    s = requests.Session()
+    csrf = re.search(r'name="_csrf" value="([^"]+)"',
+                     s.get(f"{live_server}/login").text).group(1)
+    r = s.post(f"{live_server}/login",
+               data={"username": username, "password": password, "_csrf": csrf},
+               allow_redirects=False, timeout=15)
+    assert r.status_code == 302, (
+        f"correct password refused with {r.status_code} — the account is locked "
+        "out by failures the attacker generated"
+    )
+
+
+def test_wrong_password_still_throttled_for_a_hot_account(
+        live_server, live_server_db):
+    """The counter must still answer IP-rotated guessing — the fix must not
+    simply delete the control."""
+    import re
+
+    username, password = "hot_account_probe", "Hot-Account-Pass!2026"
+    _make_user(live_server_db, username, password)
+    _seed_failures(live_server_db, username, 15, ip="198.51.100.2")
+
+    s = requests.Session()
+    csrf = re.search(r'name="_csrf" value="([^"]+)"',
+                     s.get(f"{live_server}/login").text).group(1)
+    r = s.post(f"{live_server}/login",
+               data={"username": username, "password": "wrong-guess",
+                     "_csrf": csrf},
+               allow_redirects=False, timeout=15)
+    assert r.status_code == 429, f"a wrong guess was not throttled ({r.status_code})"
+    assert "Retry-After" in r.headers
+
+
+def test_password_change_failures_are_throttled_and_audited(
+        live_server, live_server_db):
+    """/account/password calls verify_password too. Unthrottled and unaudited,
+    it turned a hijacked 30-minute session into permanent access."""
+    import re
+    import sqlite3
+
+    username, password = "pwchange_probe", "PwChange-Probe-Pass!2026"
+    _make_user(live_server_db, username, password, role="MANAGER")
+
+    s = requests.Session()
+    csrf = re.search(r'name="_csrf" value="([^"]+)"',
+                     s.get(f"{live_server}/login").text).group(1)
+    assert s.post(f"{live_server}/login",
+                  data={"username": username, "password": password,
+                        "_csrf": csrf},
+                  allow_redirects=False, timeout=15).status_code == 302
+
+    page = s.get(f"{live_server}/account/password")
+    tok = re.search(r'name="_csrf" value="([^"]+)"', page.text).group(1)
+    s.post(f"{live_server}/account/password",
+           data={"_csrf": tok, "current_password": "wrong",
+                 "new_password": "Some-New-Password!2026",
+                 "confirm_password": "Some-New-Password!2026"},
+           allow_redirects=False, timeout=15)
+
+    conn = sqlite3.connect(live_server_db, timeout=10)
+    try:
+        rows = conn.execute(
+            "SELECT details FROM audit_log WHERE action = 'LOGIN_FAILURE' "
+            "AND actor = ?", (username,)).fetchall()
+    finally:
+        conn.close()
+    assert rows, "a wrong current-password guess left no LOGIN_FAILURE row"
+    assert any("account_password_change" in (r[0] or "") for r in rows), rows
+
+
+# ── Credential leakage and unbounded reads ──────────────────────────────────
+
+def test_secrets_are_redacted_from_logged_exceptions():
+    """The Telegram bot token is part of the request URL, and requests puts the
+    whole URL in its exception string — so logging the exception logged the
+    token into a 0644 file."""
+    from notifier import _redact
+
+    token = "123456:AAH-SECRET-BOT-TOKEN"
+    err = (f"HTTPSConnectionPool(host='api.telegram.org', port=443): Max "
+           f"retries exceeded with url: /bot{token}/sendMessage")
+    out = _redact(err, token)
+    assert token not in out
+    assert "***REDACTED***" in out
+    # Context that helps debugging must survive.
+    assert "api.telegram.org" in out
+    # A missing secret must not blank the message or raise.
+    assert _redact("plain error", None) == "plain error"
+
+
+def test_smtp_uses_a_verifying_tls_context():
+    """smtplib's starttls() with context=None is check_hostname=False /
+    verify_mode=CERT_NONE, so the Gmail app password crossed an unverified
+    channel. Guards against a silent revert to the bare call."""
+    import inspect
+    import ssl
+
+    import notifier
+    from web.blueprints import admin_settings
+
+    for mod in (notifier, admin_settings):
+        # Code lines only — the explanatory comments mention the bare call.
+        code = [l for l in inspect.getsource(mod).splitlines()
+                if not l.lstrip().startswith("#")]
+        calls = [l for l in code if ".starttls(" in l]
+        assert calls, f"{mod.__name__} no longer calls starttls at all"
+        for line in calls:
+            assert ".starttls(context=" in line, (
+                f"{mod.__name__} uses unverified STARTTLS: {line.strip()}")
+
+    ctx = ssl.create_default_context()
+    assert ctx.check_hostname is True
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+
+
+def test_unparseable_report_range_is_clamped_not_passed_through():
+    """get_alerts_by_date_range compares timestamps as STRINGS, so `from=0` and
+    `to=9` bracket every row ever stored. The clamp used to return unparseable
+    input untouched, making REPORT_MAX_RANGE_DAYS a no-op for exactly the input
+    an attacker chooses."""
+    from datetime import datetime
+
+    import config
+    from web.blueprints.reports import _clamp_report_range
+
+    start, end, clamped = _clamp_report_range("0", "9")
+    assert clamped is True, "hostile range was passed through unclamped"
+    parsed_start = datetime.strptime(start, "%Y-%m-%d")
+    parsed_end = datetime.strptime(end, "%Y-%m-%d")
+    assert (parsed_end - parsed_start).days <= config.REPORT_MAX_RANGE_DAYS
+    # And the string-compare trick no longer selects everything.
+    assert start > "1" and start[:2] == "20", start
+
+    # A legitimate range is still honoured untouched.
+    s2, e2, c2 = _clamp_report_range("2026-01-01", "2026-01-31")
+    assert (s2, e2, c2) == ("2026-01-01", "2026-01-31", False)
+
+
+def test_open_sse_stream_dies_when_the_session_is_revoked(
+        live_server, live_server_db):
+    """The SSE generator authenticates once, at connect. load_user never runs
+    again for an open response body, so a hijacked session's stream kept
+    delivering rendered alert rows for the full 30 minutes after the victim
+    logged out — defeating the primitive session_epoch exists to provide."""
+    import re
+    import threading
+
+    username, password = "sse_revoke_probe", "Sse-Revoke-Pass!2026"
+    _make_user(live_server_db, username, password, role="IT_ADMIN")
+
+    attacker = requests.Session()
+    csrf = re.search(r'name="_csrf" value="([^"]+)"',
+                     attacker.get(f"{live_server}/login").text).group(1)
+    assert attacker.post(
+        f"{live_server}/login",
+        data={"username": username, "password": password, "_csrf": csrf},
+        allow_redirects=False, timeout=15).status_code == 302
+
+    stream = attacker.get(f"{live_server}/api/events/stream",
+                          stream=True, timeout=30)
+    assert stream.status_code == 200
+    # Confirm it really opened before revoking.
+    assert next(stream.iter_lines(), None) is not None
+
+    closed = threading.Event()
+
+    def drain():
+        try:
+            for _ in stream.iter_lines():
+                pass
+        except Exception:
+            pass
+        finally:
+            closed.set()
+
+    t = threading.Thread(target=drain, daemon=True)
+    t.start()
+
+    # The victim logs out from their own browser.
+    victim = requests.Session()
+    csrf = re.search(r'name="_csrf" value="([^"]+)"',
+                     victim.get(f"{live_server}/login").text).group(1)
+    assert victim.post(
+        f"{live_server}/login",
+        data={"username": username, "password": password, "_csrf": csrf},
+        allow_redirects=False, timeout=15).status_code == 302
+    page = victim.get(f"{live_server}/dashboard/it")
+    tok = re.search(r'name="csrf-token" content="([^"]+)"', page.text).group(1)
+    assert victim.post(f"{live_server}/logout", data={"_csrf": tok},
+                       allow_redirects=False, timeout=15).status_code == 302
+
+    # Poll interval is 2s plus jitter; 20s is slack for a loaded box without
+    # being so long that "never closes" looks like "closes slowly".
+    assert closed.wait(timeout=20), (
+        "the stream outlived logout — session revocation does not reach an "
+        "already-open response body"
+    )
