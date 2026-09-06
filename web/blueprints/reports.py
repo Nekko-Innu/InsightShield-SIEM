@@ -18,6 +18,21 @@ from decorators import role_required
 from wazuh_api import get_agent_status
 from web.responses import csv_safe, rate_limited_response, reject_csv_flood
 
+
+def _report_detail_alerts(alerts: list[dict]) -> tuple[list[dict], int]:
+    """Actionable (HIGH/CRITICAL) alerts for the report's itemized sections.
+
+    An audit report summarises everything but itemises only what needed action,
+    so the per-alert Alert Details + raw-JSON appendix are scoped to HIGH/CRITICAL
+    and capped at config.REPORT_DETAIL_CAP — otherwise a busy period (or the
+    login-noise flood) renders hundreds of pages. `alerts` arrives newest-first
+    (db.get_alerts_by_date_range orders timestamp DESC). Returns
+    (capped_list, total_actionable) so the template can show "N of M".
+    """
+    actionable = [a for a in alerts
+                  if (a.get("severity") or "").upper() in config.ACTIONABLE_SEVERITIES]
+    return actionable[:config.REPORT_DETAIL_CAP], len(actionable)
+
 logger = logging.getLogger("insightshield.web.reports")
 
 bp = Blueprint("reports", __name__)
@@ -191,10 +206,15 @@ def report():
         latest_alert_id=latest_alert_id,
     )
 
+    detail_alerts, detail_total = _report_detail_alerts(alerts)
+
     return render_template(
         "report.html",
         generated=True,
         alerts=alerts,
+        detail_alerts=detail_alerts,
+        detail_total=detail_total,
+        detail_cap=config.REPORT_DETAIL_CAP,
         summary=summary,
         top_threats=top_threats,
         top_attacker_ips=top_attacker_ips,
@@ -286,6 +306,8 @@ def report_pdf():
     }
     if generated:
         context["alerts"] = _request_cache.cached_alerts_by_range(date_from, date_to)
+        context["detail_alerts"], context["detail_total"] = _report_detail_alerts(context["alerts"])
+        context["detail_cap"] = config.REPORT_DETAIL_CAP
         context["summary"] = db.get_report_summary(date_from, date_to)
         context["top_threats"] = db.get_top_threats(date_from, date_to, n=3)
         context["top_attacker_ips"] = db.get_top_attacker_ips(date_from, date_to, n=5)

@@ -511,14 +511,20 @@
     <span class="rb-h2__rule"></span>
   </header>
   <p class="rb-body">
-    Per-alert breakdown for {{ summary.total }} detection{{ 's' if summary.total != 1 }} in this period.
+    Itemised breakdown of the HIGH/CRITICAL alerts that required IT action
+    ({{ detail_alerts|length }} shown{% if detail_total > detail_alerts|length %}
+    of {{ detail_total }} — capped at {{ detail_cap }}; full data via the CSV
+    export{% endif %}), newest first. The {{ summary.total }} total
+    detection{{ 's' if summary.total != 1 }} in this period — including the
+    auto-closed lower-severity alerts — are covered in the metrics above; they
+    are not itemised here so the report stays a summary rather than an event log.
     {% if current_user.is_it_admin %}{# the appendix this points at is IT-only #}
-    Raw Wazuh JSON for each alert is in
+    Raw Wazuh JSON for these alerts is in
     <a href="#appendix-raw" style="color: var(--rb-brand);">Appendix A</a>.
     {% endif %}
   </p>
 
-  {% for a in alerts %}
+  {% for a in detail_alerts %}
   {% set sev = a.severity|lower %}
   <article class="rb-alert" data-sev="{{ a.severity }}">
     <div class="rb-alert__head">
@@ -637,6 +643,8 @@
          back of the document — closer to how a Wazuh PDF audit lays out. #}
     </div>
   </article>
+  {% else %}
+  <p class="rb-meta">No HIGH/CRITICAL alerts required action in this period.</p>
   {% endfor %}
 </section>{# /alert-details #}
 
@@ -673,9 +681,13 @@
     </button>
   </header>
   <p class="rb-body" style="max-width: 65ch;">
-    Original Wazuh decoder payloads for forensic verification.
+    Original Wazuh decoder payloads for the {{ detail_alerts|length }} itemised
+    HIGH/CRITICAL alert{{ 's' if detail_alerts|length != 1 }}
+    {%- if detail_total > detail_alerts|length %} (of {{ detail_total }}){% endif %},
+    for forensic verification. Full raw data for every alert is available via the
+    CSV export, not embedded here.
   </p>
-  {% for a in alerts %}
+  {% for a in detail_alerts %}
   {% if a.raw_alert %}
   <details class="bg-white rounded-xl shadow-card border border-surface-200 mb-3 overflow-hidden">
     <summary class="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-surface-50 select-none">

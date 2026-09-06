@@ -71,6 +71,13 @@ if FLASK_SECRET_KEY.strip() in _SECRET_KEY_PLACEHOLDERS:
 REPORT_PDF_PER_MIN = int(os.environ.get("REPORT_PDF_PER_MIN", "4"))
 REPORT_MAX_RANGE_DAYS = int(os.environ.get("REPORT_MAX_RANGE_DAYS", "366"))
 
+# Max alerts itemized in the report's "Alert Details" + raw-JSON appendix.
+# An audit report is a summary, not an event log: the aggregate sections cover
+# every alert, but the itemized detail is capped (and scoped to actionable
+# HIGH/CRITICAL severities in reports.py) so a busy period can't blow the PDF up
+# to hundreds of pages. Raise it only if a specific audit needs deeper listing.
+REPORT_DETAIL_CAP = int(os.environ.get("REPORT_DETAIL_CAP", "100"))
+
 # Base URL Chromium resolves the report's relative /static/* URLs against.
 # Pinned rather than taken from request.host_url: ProxyFix trusts a
 # client-supplied X-Forwarded-Host, so the header could have pointed the PDF
