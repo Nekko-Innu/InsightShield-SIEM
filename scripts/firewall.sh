@@ -47,14 +47,13 @@ else
   warn "/var/ossec not found — skipping the Wazuh port rules. Install Wazuh, then re-run."
 fi
 
-# Read the dashboard's port back out of its own config rather than assuming
-# 8443. install.sh §8 moves it off 443; reading it here means this script stays
-# correct if the operator picked a third value, and dissolves the ordering
-# hazard between the two scripts.
+# Read the dashboard's port back out of its own config rather than assuming it.
+# The dashboard keeps its default 443; Insight Shield's nginx is on 8444, so
+# there is no collision to guard against. Reading the value here means this
+# script stays correct if the operator ever moved the dashboard to a third port.
 DASH_YML=/etc/wazuh-dashboard/opensearch_dashboards.yml
 DASH_PORT="$(sed -n 's/^server\.port: *//p' "$DASH_YML" 2>/dev/null | head -1)"
-DASH_PORT="${DASH_PORT:-8443}"
-[ "$DASH_PORT" = 443 ] && die "wazuh-dashboard is still on 443 — it collides with nginx (runbook §0.1). Run scripts/install.sh first."
+DASH_PORT="${DASH_PORT:-443}"
 
 echo "    interface:      $IFACE"
 echo "    LAN subnet:     $LAN_CIDR"
@@ -98,8 +97,8 @@ allow_port() {  # $1 = port, $2 = what it is for
   fi
 }
 
-allow_port 80  "nginx HTTP -> HTTPS redirect"
-allow_port 443 "Insight Shield"
+allow_port 80   "nginx HTTP -> HTTPS redirect"
+allow_port 8444 "Insight Shield"
 
 if [ "$HAVE_WAZUH" = 1 ]; then
   allow_port 1514 "Wazuh agent events"

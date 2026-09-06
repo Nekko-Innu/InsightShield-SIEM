@@ -298,26 +298,15 @@ EOF
 fi
 
 # ── 8. Wazuh dashboard port (B1) ─────────────────────────────────────────────
-# The dashboard and nginx both default to 443 on this host. Whichever starts
-# second dies with "Port 443 is already in use". nginx keeps 443 because the
-# app's CSP, HSTS and REPORT_ASSET_BASE_URL all assume the standard port.
+# The Wazuh dashboard keeps its default 443 on this host. Insight Shield's nginx
+# listens on 8444 (see nginx/insightshield.conf), so there is no collision and
+# the dashboard is left exactly where the Wazuh installer put it. This section
+# used to move the dashboard 443 -> 8443 so nginx could own 443; that is no
+# longer done — nothing here should ever rewrite opensearch_dashboards.yml.
 
 if [ -f "$DASH_YML" ]; then
-  if grep -q '^server.port: 8443' "$DASH_YML"; then
-    pass "dashboard: already on 8443"
-  elif grep -q '^server.port: 443' "$DASH_YML"; then
-    sed -i 's/^server\.port: 443/server.port: 8443/' "$DASH_YML"
-    DASH_CHANGED=1
-    pass "dashboard: moved 443 -> 8443"
-  else
-    # Somebody (or a package upgrade) already set a third value. Reporting beats
-    # forcing — it may be deliberate, and it is not colliding with us.
-    warn "dashboard: server.port is neither 443 nor 8443 — left alone: $(grep '^server.port' "$DASH_YML")"
-  fi
-  if [ "$DASH_CHANGED" = 1 ]; then
-    systemctl restart wazuh-dashboard && pass "dashboard: restarted on 8443" \
-      || fail "dashboard: restart failed"
-  fi
+  DASH_PORT_NOW="$(sed -n 's/^server\.port: *//p' "$DASH_YML" 2>/dev/null | head -1)"
+  pass "dashboard: left on its own port (${DASH_PORT_NOW:-443}) — nginx is on 8444, no collision"
 else
   [ "$HAVE_WAZUH" = 1 ] && warn "dashboard: $DASH_YML not found — is wazuh-dashboard installed?"
 fi

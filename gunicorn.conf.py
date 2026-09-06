@@ -3,7 +3,7 @@
 # Used by: systemd service (ExecStart)
 # Deploy to: /opt/insightshield/gunicorn.conf.py on VM-03
 
-bind = "127.0.0.1:5000"   # Loopback only — nginx on 443 is the public entrypoint
+bind = "127.0.0.1:5000"   # Loopback only — nginx on 8444 is the public entrypoint
 
 # Everything that used to be a process-local module global now lives in SQLite
 # (WAL, synchronous=NORMAL, busy_timeout=10000, thread-local connections — see
