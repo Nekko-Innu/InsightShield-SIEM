@@ -266,11 +266,16 @@ fi
 # turns every alert into a 403 with nothing on screen to say why.
 # Neither value is printed.
 ENV_FILE=/opt/insightshield/insightshield/.env
-ENV_TOKEN="$(sed -n 's/^WAZUH_WEBHOOK_TOKEN=//p' "$ENV_FILE" 2>/dev/null | head -1)"
+# tr -d '\r': a .env saved with Windows CRLF endings leaves a trailing carriage
+# return on the value. The app's dotenv loader strips it, but a raw sed does
+# not — so without this the token compare and the probe header carry a stray
+# \r, the compare mismatches a clean ossec.conf value, and the probe 403s,
+# reporting a drift that does not exist.
+ENV_TOKEN="$(sed -n 's/^WAZUH_WEBHOOK_TOKEN=//p' "$ENV_FILE" 2>/dev/null | head -1 | tr -d '\r')"
 if [ -z "$ENV_TOKEN" ]; then
   fail "token: WAZUH_WEBHOOK_TOKEN unset in $ENV_FILE — the webhook rejects everything"
 elif [ "$HAVE_WAZUH" = 1 ]; then
-  CONF_TOKEN="$(sed -n 's|.*<api_key>\(.*\)</api_key>.*|\1|p' /var/ossec/etc/ossec.conf 2>/dev/null | head -1)"
+  CONF_TOKEN="$(sed -n 's|.*<api_key>\(.*\)</api_key>.*|\1|p' /var/ossec/etc/ossec.conf 2>/dev/null | head -1 | tr -d '\r')"
   if [ "$ENV_TOKEN" = "$CONF_TOKEN" ]; then
     pass "token: ossec.conf <api_key> matches .env"
   else
