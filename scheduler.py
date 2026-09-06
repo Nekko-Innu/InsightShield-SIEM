@@ -257,6 +257,7 @@ def _escalation_sweep() -> None:
     """
     import db
     import notifier
+    import rate_limit
 
     alerts = db.get_unacked_critical_alerts(
         min_age_minutes=config.ESCALATION_INTERVAL_MIN,
@@ -270,6 +271,16 @@ def _escalation_sweep() -> None:
         try:
             notifier.send_telegram(alert)
             notifier.send_email(alert)
+            # Nudge the manager ONCE per alert (the manager channel is low-noise
+            # by design — not the per-sweep repeat IT gets). limit_per_min=1 over
+            # the whole escalation lifetime means the first sweep to see this
+            # unacked CRITICAL notifies the manager; later sweeps are denied.
+            allowed, _ = rate_limit.can_call(
+                f"mgr-escal:{alert.get('id')}", limit_per_min=1,
+                window_seconds=config.ESCALATION_MAX_AGE_H * 3600,
+            )
+            if allowed:
+                notifier.send_manager_escalation(alert)
         except Exception as e:
             # One bad alert must not abandon the rest of the sweep. The
             # EVENT_JOB_ERROR listener only sees an exception that escapes the

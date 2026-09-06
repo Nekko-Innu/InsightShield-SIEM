@@ -203,6 +203,37 @@ def send_manager_resolution_notification(alert: dict,
     )
 
 
+def send_manager_escalation(alert: dict, bypass_toggle: bool = False) -> bool:
+    """
+    Notify the manager that a CRITICAL alert is still unacknowledged.
+
+    Fired ONCE per alert by scheduler._escalation_sweep (deduped there via the
+    rate limiter) — the manager channel is deliberately low-noise, so this is a
+    single nudge, not the per-sweep repeat IT gets. Same manager bot + chat +
+    toggle as send_manager_telegram / send_manager_resolution_notification.
+    Returns False (without raising) if deactivated or not configured.
+    """
+    if not bypass_toggle and not _service_is_active("telegram_manager"):
+        logger.info(
+            "Telegram(Manager) escalation SKIPPED: service_active.telegram_manager=0 "
+            "(operator deactivated) alert_id=%s", alert.get("id"),
+        )
+        return False
+    text = (
+        f"[Insight Shield] CRITICAL alert #{alert.get('id')} "
+        f"({alert.get('attack_type', 'alert')} on "
+        f"{alert.get('device_name', '?')}) "
+        f"is still UNACKNOWLEDGED — IT has been paged."
+    )
+    return _post_telegram(
+        _request_cache.cached_api_key("telegram_manager", "BOT_TOKEN"),
+        _request_cache.cached_setting("telegram_manager_chat_id"),
+        text,
+        parse_mode="",  # plain text — no HTML escaping surprises
+        label=f"Telegram(Manager-escalation) alert_id={alert.get('id')}",
+    )
+
+
 # ── Gmail SMTP ───────────────────────────────────────────────────────────────
 
 def send_email(alert: dict) -> bool:
