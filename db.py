@@ -639,13 +639,15 @@ def get_report_summary(date_from: str, date_to: str) -> dict:
     total = len(alerts)
     if total == 0:
         return {"total": 0, "severity": {}, "avg_fk": 0.0, "avg_response": "—",
-                "providers": {}, "resolved_count": 0, "ack_count": 0}
+                "providers": {}, "resolved_count": 0, "auto_closed_count": 0,
+                "ack_count": 0}
 
     severity = {"INFORMATIONAL": 0, "LOW": 0, "MEDIUM": 0, "HIGH": 0, "CRITICAL": 0}
     fk_grades = []
     resp_times = []
     providers = {}
     resolved_count = 0
+    auto_closed_count = 0
     ack_count = 0
 
     for a in alerts:
@@ -658,8 +660,13 @@ def get_report_summary(date_from: str, date_to: str) -> dict:
             resp_times.append(a["response_time_s"])
         prov = a.get("provider_used", "unknown")
         providers[prov] = providers.get(prov, 0) + 1
+        # Split system auto-closes from human resolutions so the report doesn't
+        # read ~100% "resolved" just because sub-HIGH alerts auto-close.
         if a.get("resolved"):
-            resolved_count += 1
+            if a.get("resolved_by") == config.SYSTEM_ACTOR:
+                auto_closed_count += 1
+            else:
+                resolved_count += 1
         if a.get("acknowledged"):
             ack_count += 1
 
@@ -670,6 +677,7 @@ def get_report_summary(date_from: str, date_to: str) -> dict:
         "avg_response": f"{sum(resp_times) / len(resp_times):.0f}s" if resp_times else "—",
         "providers": providers,
         "resolved_count": resolved_count,
+        "auto_closed_count": auto_closed_count,
         "ack_count": ack_count,
     }
 
@@ -808,7 +816,7 @@ def acknowledge_alert(alert_id: int, username: str) -> bool:
             response_time_s = CAST(
                 (julianday(?) - julianday(timestamp)) * 86400 AS INTEGER
             )
-        WHERE id = ? AND acknowledged = 0
+        WHERE id = ? AND acknowledged = 0 AND resolved = 0
         """,
         (username, ack_time, ack_time, alert_id),
     )
@@ -896,6 +904,37 @@ def resolve_alert(alert_id: int, username: str, note: str = "") -> bool:
         "Resolve failed: id=%s (not found, not IT-acked, or already resolved)",
         alert_id,
     )
+    return False
+
+
+def auto_close_alert(alert_id: int, note: str = None) -> bool:
+    """
+    Auto-close a sub-HIGH alert as a system action — no IT acknowledgment.
+
+    MEDIUM/LOW/INFORMATIONAL alerts don't need a human to ack or resolve them
+    (see config.requires_ack), so they are closed at ingest: resolved by
+    config.SYSTEM_ACTOR with a fixed note. `acknowledged` is deliberately left
+    untouched so the row never enters the ack lifecycle and stays out of MTTA
+    (which keys on acknowledged = 1). Idempotent — the `resolved = 0` guard
+    makes a re-run (or a race with a human resolve) a no-op.
+    """
+    close_time = datetime.now(tz=config.PHT).isoformat()
+    conn = _get_conn()
+    cursor = _execute_with_retry(
+        """
+        UPDATE alerts SET
+            resolved = 1,
+            resolved_by = ?,
+            resolved_at = ?,
+            resolve_note = ?
+        WHERE id = ? AND resolved = 0
+        """,
+        (config.SYSTEM_ACTOR, close_time, note or config.AUTO_CLOSE_NOTE, alert_id),
+    )
+    conn.commit()
+    if cursor.rowcount > 0:
+        logger.info("Alert auto-closed (system): id=%s at=%s", alert_id, close_time)
+        return True
     return False
 
 

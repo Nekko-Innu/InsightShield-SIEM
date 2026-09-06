@@ -78,14 +78,14 @@ if need_cmd curl "the HTTP endpoint checks"; then
   fi
 
   # 4. nginx /health via HTTPS (self-signed, so -k)
-  if curl -fkSs https://127.0.0.1/health | grep -q '"status": *"ok"'; then
+  if curl -fkSs https://127.0.0.1:8444/health | grep -q '"status": *"ok"'; then
     pass "nginx: HTTPS /health returns ok"
   else
     fail "nginx: HTTPS /health failed"
   fi
 
   # 5. Login page renders
-  if curl -fkSs https://127.0.0.1/login | grep -q 'Insight Shield'; then
+  if curl -fkSs https://127.0.0.1:8444/login | grep -q 'Insight Shield'; then
     pass "nginx: /login renders"
   else
     fail "nginx: /login does not render"
@@ -150,6 +150,32 @@ if need_cmd sqlite3 "the database checks"; then
     else
       fail "sqlite: bootstrap_complete missing — first-boot import did not run"
     fi
+
+    # AI-provider health tripwire. WARN-level on purpose: a real provider outage
+    # should not hard-fail a deploy, but a pipeline that is silently 100% static
+    # must be visible — that is exactly the state a prior status doc graded as
+    # "production-ready / rate-limit mitigated" while AI was actually dead.
+    ACTIVE=$(sqlite3 "$DB" "SELECT COUNT(*) FROM ai_providers WHERE is_active=1;" 2>/dev/null)
+    if [ "${ACTIVE:-0}" -eq 0 ]; then
+      warn "ai: no active AI providers — every alert uses the static template (configure one, then scripts/repair_providers.py)"
+    else
+      pass "ai: $ACTIVE active provider(s)"
+      # Known-dead slugs — mirror config.KNOWN_BAD_AI_MODELS. These 400 and read
+      # as an outage, so an active provider carrying one is the root-cause flag.
+      BAD=$(sqlite3 "$DB" "SELECT label||' -> '||model FROM ai_providers WHERE is_active=1 AND model IN ('google/gemma-4-26b-a4b-it:free','openrouter/free');" 2>/dev/null)
+      if [ -n "$BAD" ]; then
+        warn "ai: active provider has a known-invalid model ($BAD) — run scripts/repair_providers.py"
+      fi
+      # Live-vs-static reality check: if every recent HIGH/CRITICAL alert used the
+      # static template despite an active provider, the provider is failing.
+      HC_TOTAL=$(sqlite3 "$DB" "SELECT COUNT(*) FROM (SELECT id FROM alerts WHERE severity IN ('HIGH','CRITICAL') ORDER BY id DESC LIMIT 50);" 2>/dev/null)
+      HC_STATIC=$(sqlite3 "$DB" "SELECT COUNT(*) FROM (SELECT provider_used FROM alerts WHERE severity IN ('HIGH','CRITICAL') ORDER BY id DESC LIMIT 50) t WHERE t.provider_used='static';" 2>/dev/null)
+      if [ "${HC_TOTAL:-0}" -gt 0 ] && [ "${HC_STATIC:-0}" -eq "${HC_TOTAL:-0}" ]; then
+        warn "ai: all ${HC_TOTAL} recent HIGH/CRITICAL alerts fell to the static template despite an active provider — AI is failing (bad model or quota); check logs for 'FAILED [4'"
+      else
+        pass "ai: recent HIGH/CRITICAL alerts include live AI translations (${HC_STATIC:-0}/${HC_TOTAL:-0} static)"
+      fi
+    fi
   else
     fail "sqlite: $DB missing or corrupt"
   fi
@@ -194,18 +220,16 @@ fi
 # breaks — so without these a bad install looks healthy.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# 10. nginx owns 443, and the Wazuh dashboard is not configured to want it.
-# Both default to 443 on this host; the loser of that race just fails to start.
-# The process column of `ss -p` is only populated for sockets the caller owns,
-# which is one of the reasons this script insists on root.
+# 10. nginx owns 8444 (Insight Shield). The Wazuh dashboard keeps its default
+# 443 — the two no longer contend for a port. The process column of `ss -p` is
+# only populated for sockets the caller owns, one of the reasons this script
+# insists on root.
 DASH_YML=/etc/wazuh-dashboard/opensearch_dashboards.yml
-if need_cmd ss "the port 443 ownership check"; then
-  if ! ss -tlnp 2>/dev/null | grep ':443 ' | grep -q nginx; then
-    fail "port 443: nginx is not listening — check 'systemctl status nginx'"
-  elif [ -f "$DASH_YML" ] && grep -q '^server.port: 443' "$DASH_YML"; then
-    fail "port 443: wazuh-dashboard still configured for 443 — it will collide with nginx (runbook §3.4)"
+if need_cmd ss "the port 8444 ownership check"; then
+  if ! ss -tlnp 2>/dev/null | grep ':8444 ' | grep -q nginx; then
+    fail "port 8444: nginx is not listening — check 'systemctl status nginx'"
   else
-    pass "port 443: nginx owns it, dashboard is elsewhere"
+    pass "port 8444: nginx owns it (Insight Shield); Wazuh dashboard is on 443"
   fi
 fi
 
@@ -296,7 +320,7 @@ fi
 IFACE="$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')"
 LAN_CIDR="${LAN_CIDR:-$(ip -4 route show dev "${IFACE:-lo}" scope link 2>/dev/null | awk '{print $1; exit}')}"
 DASH_PORT="$(sed -n 's/^server\.port: *//p' "$DASH_YML" 2>/dev/null | head -1)"
-DASH_PORT="${DASH_PORT:-8443}"
+DASH_PORT="${DASH_PORT:-443}"
 
 if need_cmd ufw "the firewall checks"; then
   UFW_STATUS="$(ufw status 2>/dev/null)"
@@ -312,7 +336,7 @@ if need_cmd ufw "the firewall checks"; then
   # 17. Every port the deployment needs is actually open. A missing 1514/1515
   # rule does not break anything until an agent next reconnects, which can be
   # hours after the firewall change — conntrack keeps existing sessions alive.
-  for entry in "80:nginx HTTP redirect" "443:Insight Shield"; do
+  for entry in "80:nginx HTTP redirect" "8444:Insight Shield"; do
     port="${entry%%:*}"
     if echo "$UFW_STATUS" | grep -qE "^${port}/tcp .*ALLOW"; then
       pass "ufw: ${port}/tcp allowed (${entry#*:})"

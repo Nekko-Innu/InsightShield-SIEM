@@ -261,6 +261,7 @@
     <div class="rb-kpi">
       <div class="rb-kpi__label">Resolved</div>
       <div class="rb-kpi__value">{{ summary.resolved_count }}</div>
+      {% if summary.auto_closed_count %}<div class="rb-kpi__sub">+{{ summary.auto_closed_count }} auto-closed</div>{% endif %}
     </div>
     <div class="rb-kpi">
       <div class="rb-kpi__label">Avg FK grade</div>
@@ -473,12 +474,19 @@
       {{ 'were' if summary.ack_count != 1 else 'was' }}
       acknowledged by IT and <strong>{{ summary.resolved_count }}</strong>
       {{ 'were' if summary.resolved_count != 1 else 'was' }} resolved.
+      {% if summary.auto_closed_count %}
+      A further <strong>{{ summary.auto_closed_count }}</strong> lower-severity
+      detection{{ 's' if summary.auto_closed_count != 1 }}
+      {{ 'were' if summary.auto_closed_count != 1 else 'was' }} auto-closed as
+      informational, requiring no IT action.
+      {% endif %}
       Average IT response time was <strong>{{ summary.avg_response }}</strong>.
-      {% set _pending = summary.total - summary.ack_count %}
+      {# Auto-closed alerts never needed an ack, so they are not "pending". #}
+      {% set _pending = summary.total - summary.ack_count - summary.auto_closed_count %}
       {% if _pending > 0 %}
         <span style="color: var(--sev-high-border);">{{ _pending }} detection{{ 's' if _pending != 1 }} remained unacknowledged at report time.</span>
       {% elif summary.total > 0 %}
-        All detections received an acknowledgment.
+        All detections requiring action received an acknowledgment.
       {% endif %}
     </p>
     <p class="rb-meta">

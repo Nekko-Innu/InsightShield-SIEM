@@ -19,6 +19,7 @@
 
 import logging
 import os
+import re
 import time
 from typing import Callable, Optional
 
@@ -29,6 +30,33 @@ import rate_limit
 import validator
 
 logger = logging.getLogger("insightshield._ai_chain")
+
+
+class ProviderError(Exception):
+    """A provider returned a non-2xx HTTP status.
+
+    Carries the status and a short, key-scrubbed body snippet so run_chain can
+    tell a configuration error (400 model-not-found, 401 bad key) apart from a
+    rate limit (429) — the exact distinction that was lost when every failure
+    logged as a bare `HTTPError` and a dead model id read as "rate limiting".
+    """
+    def __init__(self, status: int, snippet: str = ""):
+        self.status = status
+        self.snippet = snippet
+        super().__init__(f"{status}: {snippet}")
+
+
+# Redact anything key-shaped before a provider's response body enters
+# `reasoning`, which is persisted to alerts.ai_reasoning and rendered in the UI.
+# Bodies rarely echo the key, but some gateways do on auth errors — cheap insurance.
+_KEY_RE = re.compile(r"(Bearer\s+\S+|sk-[A-Za-z0-9_\-]+|AIza[A-Za-z0-9_\-]+|gsk_[A-Za-z0-9_\-]+)")
+
+
+def _scrub(text: str, limit: int = 200) -> str:
+    """One-line, key-free, length-capped snippet of a provider error body."""
+    if not text:
+        return ""
+    return _KEY_RE.sub("[redacted]", text)[:limit].replace("\n", " ").strip()
 
 # Sentinel returned when every active provider failed validation. Stored in DB
 # verbatim by callers that have no static fallback (the IT recommender);
@@ -121,24 +149,31 @@ def run_chain(
             )
             break
 
-        # Burst absorber: Groq's free-tier 30/min ceiling. Round 3 generalises
-        # via a `rate_limit_per_min` column on ai_providers — for Round 2 the
-        # inline check is honest about the only constraint we actually have.
-        if label.lower() == "groq":
-            allowed, retry_after = rate_limit.can_call("groq", config.GROQ_BUDGET_PER_MIN)
-            if not allowed:
-                window_calls = rate_limit.window_count("groq")
-                reasoning.append(
-                    f"Groq SKIPPED by burst absorber "
-                    f"({window_calls}/{config.GROQ_BUDGET_PER_MIN} in last 60s, "
-                    f"retry in {retry_after:.1f}s). Falling through."
-                )
-                logger.warning(
-                    "ai_chain: Groq rate_limited key=%s window=%d retry=%.1fs",
-                    cache_key, window_calls, retry_after,
-                )
-                _audit_burst_absorber(cache_key, window_calls, retry_after)
-                continue
+        # Burst absorber, now per-provider (was Groq-only). Every provider has a
+        # per-minute ceiling (config.AI_PROVIDER_RATE_LIMITS, keyed by label);
+        # translation, IT recommendation and exec summary all route through here
+        # and share one window per label, so the cap bounds TOTAL outbound calls
+        # to a provider per minute across all three sources. Past the cap the
+        # provider is skipped and the chain falls to the next one, then static —
+        # a HIGH/CRITICAL burst can never exceed the free tier.
+        key = label.lower()
+        limit = config.AI_PROVIDER_RATE_LIMITS.get(
+            key, config.AI_PROVIDER_RATE_LIMIT_DEFAULT
+        )
+        allowed, retry_after = rate_limit.can_call(key, limit)
+        if not allowed:
+            window_calls = rate_limit.window_count(key)
+            reasoning.append(
+                f"{label} SKIPPED by rate limiter "
+                f"({window_calls}/{limit} in last 60s, retry in {retry_after:.1f}s). "
+                f"Falling through."
+            )
+            logger.warning(
+                "ai_chain: %s rate_limited key=%s window=%d retry=%.1fs",
+                label, cache_key, window_calls, retry_after,
+            )
+            _audit_burst_absorber(cache_key, window_calls, retry_after, provider=key)
+            continue
 
         try:
             timeout_s = min(remaining, 30.0)
@@ -158,6 +193,27 @@ def run_chain(
         except NotImplementedError as e:
             reasoning.append(f"{label} SKIPPED ({e}). Falling through.")
             logger.warning("ai_chain: %s not implemented (key=%s): %s", label, cache_key, e)
+        except ProviderError as e:
+            if e.status == 429:
+                # Provider explicitly said slow down. Saturate its window so the
+                # rest of this burst stops knocking on it — otherwise 40 queued
+                # alerts each re-learn the 429 the hard way.
+                rate_limit.saturate(key, limit)
+                reasoning.append(
+                    f"{label} FAILED [429 rate_limited: {e.snippet}]. "
+                    f"Backing off for the window, falling through."
+                )
+            else:
+                # 400/401/404/5xx — a config or provider problem, NOT a quota
+                # issue. Named distinctly so a dead model id can never again be
+                # mistaken for rate limiting.
+                reasoning.append(
+                    f"{label} FAILED [{e.status} {e.snippet}]. Falling through."
+                )
+            logger.warning(
+                "ai_chain: %s provider error key=%s status=%s: %s",
+                label, cache_key, e.status, e.snippet,
+            )
         except Exception as e:
             # Class name only. `reasoning` is persisted to alerts.ai_reasoning
             # and rendered on the alert detail page; requests exceptions embed
@@ -216,7 +272,12 @@ def _call_openai_compat(provider: dict, prompt: str, timeout_s: float = 30.0) ->
     # x-api-key / x-goog-api-key, so the key would ride along to the target.
     r = requests.post(provider["base_url"], headers=headers, json=body,
                       timeout=timeout_s, allow_redirects=False)
-    r.raise_for_status()
+    # Was r.raise_for_status(), which threw a bare HTTPError that run_chain
+    # logged as class-name only — so a 400 "model not found" was
+    # indistinguishable from a 429 quota hit. Carry the status + a scrubbed
+    # body snippet instead.
+    if r.status_code >= 400:
+        raise ProviderError(r.status_code, _scrub(r.text))
     return r.json()["choices"][0]["message"]["content"].strip()
 
 
@@ -235,10 +296,21 @@ def _call_gemini_v1beta(provider: dict, prompt: str, timeout_s: float = 30.0) ->
         # 25ms timeout and every Gemini call fails instantly.
         http_options=genai_types.HttpOptions(timeout=int(timeout_s * 1000)),
     )
-    response = client.models.generate_content(
-        model=provider["model"],
-        contents=prompt,
-    )
+    try:
+        response = client.models.generate_content(
+            model=provider["model"],
+            contents=prompt,
+        )
+    except Exception as e:
+        # google-genai raises APIError subclasses carrying a numeric `.code`
+        # (e.g. 429 RESOURCE_EXHAUSTED, 400 INVALID_ARGUMENT). Map it to a
+        # ProviderError so Gemini gets the same 429-vs-config distinction and
+        # back-off as the OpenAI-compatible path; anything without a code
+        # falls through to run_chain's generic handler unchanged.
+        code = getattr(e, "code", None) or getattr(e, "status_code", None)
+        if isinstance(code, int):
+            raise ProviderError(code, _scrub(str(getattr(e, "message", e) or e)))
+        raise
     return response.text.strip()
 
 
@@ -253,21 +325,25 @@ def _call_anthropic_messages(provider: dict, prompt: str) -> str:
 
 # ── Audit helper ─────────────────────────────────────────────────────────────
 
-def _audit_burst_absorber(cache_key: Optional[str], window_calls: int, retry_after: float) -> None:
-    """Best-effort audit trail when Groq is burst-absorbed. Imported lazily to
-    avoid an import cycle (db.py doesn't import _ai_chain, but anyone importing
+def _audit_burst_absorber(cache_key: Optional[str], window_calls: int,
+                          retry_after: float, provider: str = "groq") -> None:
+    """Best-effort audit trail when a provider is burst-absorbed. Imported lazily
+    to avoid an import cycle (db.py doesn't import _ai_chain, but anyone importing
     _ai_chain must not require db at module load)."""
     try:
         import db
+        limit = config.AI_PROVIDER_RATE_LIMITS.get(
+            provider, config.AI_PROVIDER_RATE_LIMIT_DEFAULT
+        )
         db.log_audit(
             action="BURST_ABSORBER",
             actor="system",
             actor_role="system",
-            target="groq",
+            target=provider,
             details={
                 "cache_key": cache_key,
                 "window_calls": window_calls,
-                "limit_per_min": config.GROQ_BUDGET_PER_MIN,
+                "limit_per_min": limit,
                 "retry_after_s": round(retry_after, 1),
             },
         )

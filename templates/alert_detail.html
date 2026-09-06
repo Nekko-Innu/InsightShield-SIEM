@@ -63,7 +63,8 @@
     <span class="font-mono text-sm text-slate-700">{{ alert.device_name}}</span>
     <time datetime="{{ alert.timestamp }}" class="text-sm text-slate-500">{{ alert.timestamp | forensic_ts }}</time>
     <span class="ml-auto text-sm">
-      {% if alert.resolved_at %}<span class="text-purple-700 font-medium">Resolved</span>
+      {% if alert.resolved_by == 'system' %}<span class="text-slate-500 font-medium">Auto-closed</span>
+      {% elif alert.resolved_at %}<span class="text-purple-700 font-medium">Resolved</span>
       {% elif alert.acknowledged_at %}<span class="text-green-700 font-medium">IT acknowledged</span>
       {% else %}<span class="text-red-700 font-medium">Open</span>{% endif %}
     </span>
@@ -304,6 +305,7 @@
 <!-- Lifecycle Timeline -->
 <section aria-labelledby="lifecycle-title" class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
   <h2 id="lifecycle-title" class="text-sm font-medium text-slate-500 mb-3">Lifecycle</h2>
+  {% set auto_closed = alert.resolved_by == 'system' %}
   <ul class="space-y-2 text-sm">
     <li class="flex gap-3">
       <span class="text-red-600 shrink-0">●</span>
@@ -312,6 +314,19 @@
         <div class="text-xs text-slate-500 font-mono">{{ alert.timestamp | forensic_ts }}</div>
       </div>
     </li>
+    {% if auto_closed %}
+    {# MEDIUM/LOW/INFORMATIONAL are auto-closed at ingest — no IT ack/resolve
+       needed, so the timeline terminates here rather than showing two
+       perpetually-"Pending" steps. #}
+    <li class="flex gap-3">
+      <span class="text-slate-500 shrink-0">●</span>
+      <div class="flex-1">
+        <div class="font-medium text-slate-900">Auto-closed — no action required</div>
+        <div class="text-xs text-slate-600">Informational severity; closed automatically by the system.</div>
+        <div class="text-xs text-slate-500 font-mono">{{ alert.resolved_at | forensic_ts }}</div>
+      </div>
+    </li>
+    {% else %}
     <li class="flex gap-3">
       <span class="{{ 'text-green-600' if alert.acknowledged_at else 'text-slate-300' }} shrink-0">●</span>
       <div class="flex-1">
@@ -340,12 +355,18 @@
         {% endif %}
       </div>
     </li>
+    {% endif %}
   </ul>
 </section>
 
 <!-- ACK zone -->
 <section class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
   <h2 class="text-sm font-medium text-slate-500 mb-3">Acknowledge</h2>
+  {% if auto_closed %}
+    {# Auto-closed informational alert — nothing for IT to act on. #}
+    <p class="text-sm text-slate-600">No action required. This informational alert was closed
+       automatically on arrival.</p>
+  {% else %}
   <div class="flex flex-wrap gap-3">
     {% if current_user.is_it_admin and not alert.acknowledged_at %}
       <button type="button" onclick="wpOpenModal('it-ack-modal')"
@@ -363,6 +384,7 @@
     {% if alert.resolve_note %}<p class="mt-1 text-xs text-slate-600 italic">{{ alert.resolve_note }}</p>{% endif %}
   {% endif %}
   <p class="mt-3 text-xs text-slate-500">Only IT Admin acknowledgment stops the 5-minute escalation timer.</p>
+  {% endif %}
 </section>
 
 </aside>{# /detail-right #}

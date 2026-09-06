@@ -77,7 +77,8 @@
   <td class="px-3 py-2 font-mono text-xs truncate" title="{{ a.rule_id }}">{{ a.rule_id }}</td>
   <td class="px-3 py-2 truncate" title="{{ a.plain_text|default('—') }}">Alert #{{ a.id }} · Rule {{ a.rule_id }} · {{ a.attack_type|default('Alert') }}</td>
   <td class="px-3 py-2 truncate">
-    {% if a.resolved_at %}<span class="text-purple-700 text-xs">Resolved</span>
+    {% if a.resolved_by == 'system' %}<span class="text-slate-500 text-xs">Auto-closed</span>
+    {% elif a.resolved_at %}<span class="text-purple-700 text-xs">Resolved</span>
     {% elif a.acknowledged_at %}<span class="text-green-700 text-xs">IT acked</span>
     {% else %}<span class="text-red-700 text-xs">Open</span>{% endif %}
   </td>

@@ -25,7 +25,7 @@
 
 set -u
 
-BASE="${1:-https://127.0.0.1}"
+BASE="${1:-https://127.0.0.1:8444}"
 WEBHOOK_TOKEN="${SMOKE_WEBHOOK_TOKEN:-}"
 # No defaults: the bootstrap literals were removed from config.py, so there is
 # nothing left to guess. Export the real values before running this.
@@ -37,6 +37,7 @@ trap 'rm -f "$COOKIES"' EXIT
 FAIL=0
 pass() { printf "\e[32m[PASS]\e[0m %s\n" "$1"; }
 fail() { printf "\e[31m[FAIL]\e[0m %s\n" "$1"; FAIL=1; }
+warn() { printf "\e[33m[WARN]\e[0m %s\n" "$1"; }
 
 # curl with -k (self-signed accepted), -s (silent), -S (errors), --cookie-jar
 # for session persistence. We lock to a single jar across all requests so
@@ -69,10 +70,11 @@ PAYLOAD=$(cat <<EOF
 EOF
 )
 
-if $CURL -H "Content-Type: application/json" -H "X-Webhook-Token: $WEBHOOK_TOKEN" \
-        -d "$PAYLOAD" \
-        "$BASE/wazuh-webhook" | grep -q '"alert_id"'; then
-  pass "webhook accepted, alert_id returned"
+WEBHOOK_RESP=$($CURL -H "Content-Type: application/json" -H "X-Webhook-Token: $WEBHOOK_TOKEN" \
+        -d "$PAYLOAD" "$BASE/wazuh-webhook")
+ALERT_ID=$(echo "$WEBHOOK_RESP" | jq -r '.alert_id // empty' 2>/dev/null)
+if [ -n "$ALERT_ID" ]; then
+  pass "webhook accepted, alert_id=$ALERT_ID"
 else
   fail "webhook rejected — set SMOKE_WEBHOOK_TOKEN to match WAZUH_WEBHOOK_TOKEN, or see /var/log/insightshield/app.log"
 fi
@@ -83,6 +85,22 @@ if $CURL -L -d "username=admin&password=$ADMIN_PASSWORD" \
   pass "IT admin login succeeded"
 else
   fail "IT admin login failed — set SMOKE_ADMIN_PASSWORD to the post-rotation password"
+fi
+
+# ── 3b. Did the HIGH alert get a LIVE AI translation, or silently fall to static?
+# WARN-level: static is correct when no AI provider is configured, but a static
+# HIGH/CRITICAL despite a configured provider is the "AI looks fine but isn't"
+# failure a prior status doc graded as production-ready. provider_used comes
+# from /api/alert/<id> (IT_ADMIN only — we're logged in as admin above).
+if [ -n "${ALERT_ID:-}" ]; then
+  PROV=$($CURL "$BASE/api/alert/$ALERT_ID" | jq -r '.provider_used // "?"' 2>/dev/null)
+  if [ "$PROV" = "static" ]; then
+    warn "chain: HIGH alert $ALERT_ID used the static template (provider_used=static) — fine if no AI provider is configured; if one is, AI is failing (run scripts/repair_providers.py; check logs for 'FAILED [4')"
+  elif [ -n "$PROV" ] && [ "$PROV" != "?" ]; then
+    pass "chain: HIGH alert $ALERT_ID got a live AI translation (provider_used=$PROV)"
+  else
+    fail "chain: could not read provider_used for alert $ALERT_ID"
+  fi
 fi
 
 # ── 4. /api/severity-breakdown reflects the new alert (HIGH bucket >= 1) ───

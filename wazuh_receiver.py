@@ -19,6 +19,13 @@ import validator
 
 logger = logging.getLogger("insightshield.wazuh_receiver")
 
+# Bounds how many IT-recommendation chain calls run at once. Each alert kicks a
+# fire-and-forget daemon thread, so a burst of criticals would otherwise fan out
+# many concurrent provider calls that race past the per-minute rate window (the
+# limiter's check-then-insert overshoot is bounded by concurrency). Serialising
+# them (default 1) is free — recommendations are off any request's critical path.
+_ITREC_SEMAPHORE = threading.BoundedSemaphore(config.IT_RECOMMENDER_MAX_CONCURRENCY)
+
 # ── Severity Level Mapping ───────────────────────────────────────────────────
 # Maps Wazuh integer rule_level to Insight Shield severity string.
 # Uses .get() with default — never direct dict access.
@@ -279,10 +286,17 @@ def process_alert(payload: dict) -> int:
     # a failure here (AI provider outage, DB lock) must not crash the webhook
     # with a raw 500; log it to error_log and signal the caller with -2 so
     # app.py's /wazuh-webhook route can return a clean 5xx JSON response.
+    # AI is reserved for the severities that matter — free-tier providers can't
+    # absorb a translation (plus an IT recommendation) on every INFORMATIONAL/
+    # LOW/MEDIUM alert. Below the gate, the manager translation uses the static
+    # template and the IT recommender does not run at all.
+    ai_ok = config.ai_enabled_for(severity)
+
     try:
-        # Step 1: AI translation (manager-facing)
+        # Step 1: AI translation (manager-facing), or static template when the
+        # severity is below the AI gate.
         plain_text, provider_used, ai_reasoning = groq_translator.translate(
-            rule_id, description, device_name
+            rule_id, description, device_name, use_ai=ai_ok
         )
 
         # Step 2: Compute FK grade (log only — never reject)
@@ -314,6 +328,13 @@ def process_alert(payload: dict) -> int:
         )
         return -2
 
+    # Step 3b: Auto-close sub-HIGH alerts. MEDIUM/LOW/INFORMATIONAL need no IT
+    # ack or resolve (config.requires_ack), so they are closed here as a system
+    # action instead of sitting "Open / Pending" forever and inflating the
+    # open-alerts KPI. HIGH/CRITICAL keep the human ack -> resolve lifecycle.
+    if not config.requires_ack(severity):
+        db.auto_close_alert(alert_id)
+
     # Step 3a used to render the alert's table row and fan it out to in-process
     # SSE subscriber queues. Both jobs moved into /api/events/stream, which
     # notices the new row by polling the database: it works across gunicorn
@@ -324,12 +345,23 @@ def process_alert(payload: dict) -> int:
     # 200 OK before the second AI call completes; the worker writes back to
     # alerts.it_recommendation when it's done. daemon=True so the thread
     # doesn't block process exit on gunicorn worker shutdown.
-    threading.Thread(
-        target=_kick_it_recommendation,
-        args=(alert_id, raw_alert_str, device_name, rule_id),
-        daemon=True,
-        name=f"itrec-{alert_id}",
-    ).start()
+    #
+    # Gated twice: only for AI-eligible severities (HIGH/CRITICAL) and only when
+    # IT_RECOMMENDER_ENABLED is set. Off by default — it is a second AI call per
+    # alert and the free tier can't afford it on top of the translation. The
+    # alert detail page renders its static fallback line when it never ran.
+    if ai_ok and config.IT_RECOMMENDER_ENABLED:
+        threading.Thread(
+            target=_kick_it_recommendation,
+            args=(alert_id, raw_alert_str, device_name, rule_id),
+            daemon=True,
+            name=f"itrec-{alert_id}",
+        ).start()
+    else:
+        logger.debug(
+            "IT recommendation skipped (alert_id=%s ai_ok=%s enabled=%s)",
+            alert_id, ai_ok, config.IT_RECOMMENDER_ENABLED,
+        )
 
     # Step 5: Route to notification channels
     try:
@@ -366,6 +398,14 @@ def _kick_it_recommendation(
     # about. A start line with no matching "complete" or "failed" is now the
     # signal that the process went away mid-generation.
     logger.info("IT recommendation start (alert_id=%s)", alert_id)
+    # Serialise the actual chain call so a burst of criticals doesn't launch
+    # many concurrent provider requests at once (see _ITREC_SEMAPHORE). Bounded
+    # wait: if the slot doesn't free within the window, skip rather than pile up
+    # threads — the cache/negative-cache means the next identical alert is cheap.
+    acquired = _ITREC_SEMAPHORE.acquire(timeout=config.AI_CHAIN_BUDGET_S + 5.0)
+    if not acquired:
+        logger.warning("IT recommendation skipped (alert_id=%s): recommender busy", alert_id)
+        return
     try:
         text, provider = it_recommender.recommend(rule_id, raw_alert_json, device_name)
         db.update_it_recommendation(alert_id, text, provider_used=provider)
@@ -376,6 +416,8 @@ def _kick_it_recommendation(
             "IT recommendation failed (alert_id=%s): %s",
             alert_id, e,
         )
+    finally:
+        _ITREC_SEMAPHORE.release()
 
 
 def _infer_attack_type(rule_id: str) -> str:

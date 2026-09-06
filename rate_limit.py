@@ -80,6 +80,36 @@ def can_call(provider: str, limit_per_min: int,
     return False, max(0.0, (oldest + window_seconds) - now)
 
 
+def saturate(provider: str, limit_per_min: int,
+             window_seconds: float = WINDOW_SECONDS) -> None:
+    """
+    Fill <provider>'s window so can_call() denies until it drains naturally.
+
+    Called when a provider returns HTTP 429 mid-chain: it has told us to slow
+    down, so stop re-hitting it for the rest of the window instead of letting
+    the next queued alert re-learn the 429. Inserts just enough events to reach
+    limit_per_min; a no-op if the window is already full.
+    """
+    now = time.time()
+    conn = db._get_conn()
+    conn.execute(
+        "DELETE FROM rate_events WHERE key = ? AND ts < ?",
+        (provider, now - window_seconds),
+    )
+    count = conn.execute(
+        "SELECT COUNT(*) FROM rate_events WHERE key = ?", (provider,)
+    ).fetchone()[0]
+    to_add = max(0, limit_per_min - count)
+    if to_add:
+        conn.executemany(
+            "INSERT INTO rate_events (key, ts) VALUES (?, ?)",
+            [(provider, now)] * to_add,
+        )
+    conn.commit()
+    logger.info("rate_limit saturated: provider=%s (+%d to reach %d)",
+                provider, to_add, limit_per_min)
+
+
 def window_count(provider: str) -> int:
     """Current in-window call count — exposed for diagnostics/KPIs."""
     now = time.time()

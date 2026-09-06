@@ -107,9 +107,29 @@ COOKIES_REQUIRE_HTTPS = os.environ.get(
 ).lower() not in ("1", "true", "yes")
 
 # ── AI Models ────────────────────────────────────────────────────────────────
-GROQ_MODEL       = "llama-3.1-8b-instant"
-GEMINI_MODEL     = "gemini-2.5-flash"
-OPENROUTER_MODEL = "google/gemma-4-26b-a4b-it:free"
+# Every model is env-overridable. This is the load-bearing fix for the outage
+# that read as "rate limiting": a hardcoded slug that a provider no longer
+# serves returns HTTP 400, the chain treats it like any other failure and falls
+# to the static template — silently. A stale constant should never be able to
+# kill AI again, so the slug is a knob, not a literal, and KNOWN_BAD_AI_MODELS
+# below lets the repair script and healthcheck name the ones we've already been
+# burned by.
+GROQ_MODEL       = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GEMINI_MODEL     = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+# ':free' OpenRouter slugs drift as models are rotated out; override via env
+# when one 404s rather than editing this line.
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
+
+# Slugs we have shipped or seeded that no provider actually serves. The one-shot
+# scripts/repair_providers.py rewrites any ai_providers row on this list to the
+# valid default for its label; scripts/healthcheck.sh warns if an active
+# provider still carries one. Deliberately NOT including "llama-3.1-8b-instant":
+# it may still be valid on some Groq tiers, and a false rewrite of a working row
+# is worse than leaving it — only slugs that are definitely dead go here.
+KNOWN_BAD_AI_MODELS = {
+    "google/gemma-4-26b-a4b-it:free",  # gemma-4 does not exist
+    "openrouter/free",                 # not a real model id
+}
 
 # Display label for the primary-provider KPI tile on the IT dashboard. Round 3
 # replaces this with `db.get_active_providers_ordered()[0]['label']` once Settings
@@ -186,6 +206,30 @@ PROVIDER_TEMPLATES = {
 # inline burst absorber in _ai_chain.run_chain reads this constant.
 GROQ_BUDGET_PER_MIN = 25
 
+# Per-provider outbound call ceiling (per minute), keyed by provider label
+# lower-cased. The burst absorber in _ai_chain.run_chain now applies to EVERY
+# provider, not just Groq, so a HIGH/CRITICAL burst — translation AND IT
+# recommendation, which share one per-label window — can never exceed the free
+# tier: past the cap the provider is skipped and the chain falls to static.
+# Kept under each vendor's real free limit (Groq 30, OpenRouter ~20, Gemini ~15).
+AI_PROVIDER_RATE_LIMITS = {
+    "groq":       GROQ_BUDGET_PER_MIN,
+    "openrouter": 18,
+    "gemini":     15,
+}
+# Any provider not named above (a Custom endpoint from Settings) gets this.
+AI_PROVIDER_RATE_LIMIT_DEFAULT = 15
+
+# The IT recommender runs in fire-and-forget daemon threads (one per alert).
+# A burst of criticals would otherwise spawn many concurrent chain calls that
+# race past the per-minute window (the limiter's check-then-insert overshoot is
+# bounded by concurrency, and threads multiply it). This bounds how many
+# recommendation calls run at once; 1 serialises them, which is free because
+# they are not on any request's critical path.
+IT_RECOMMENDER_MAX_CONCURRENCY = int(
+    os.environ.get("IT_RECOMMENDER_MAX_CONCURRENCY", "1")
+)
+
 # ── AI chain time budget ─────────────────────────────────────────────────────
 # The provider chain had a 30s timeout PER PROVIDER and no total bound, so three
 # configured providers could hold a request for 90s before falling back to the
@@ -213,6 +257,58 @@ AI_NEGATIVE_CACHE_S = 300
 # the short TTL above, and config is the one module everything already imports.
 # _ai_chain re-exports it, so no caller had to change.
 AI_CHAIN_EXHAUSTED = "AI_CHAIN_EXHAUSTED"
+
+# ── AI severity gate ─────────────────────────────────────────────────────────
+# Free-tier providers (Groq 30/min, Gemini/OpenRouter free quotas) cannot keep
+# up with an AI call — two, once the IT recommender is on — on EVERY alert. Only
+# these severities get an AI translation; INFORMATIONAL / LOW / MEDIUM fall
+# straight to groq_translator's static template, which is instant and never
+# rate-limited. The same set gates the IT recommender below. Reserving the
+# budget for HIGH/CRITICAL is what lets the free tier actually serve the alerts
+# that matter instead of burning quota on noise.
+AI_ENABLED_SEVERITIES = {"HIGH", "CRITICAL"}
+
+# The IT recommender fires a SECOND AI call per alert (IT-only investigation
+# steps). OFF by default so it never competes with the manager translation for
+# the free-tier budget — the alert detail page shows its static fallback line
+# until this is turned on. Set IT_RECOMMENDER_ENABLED=1 in .env to re-enable it;
+# it stays gated to AI_ENABLED_SEVERITIES even when on.
+IT_RECOMMENDER_ENABLED = os.environ.get(
+    "IT_RECOMMENDER_ENABLED", ""
+).lower() in ("1", "true", "yes")
+
+
+def ai_enabled_for(severity: str) -> bool:
+    """True if this severity is eligible for a live AI call.
+
+    Single source of truth for the gate so the manager-translation and the
+    IT-recommendation call sites can't drift apart. The IT recommender adds its
+    own IT_RECOMMENDER_ENABLED check on top of this.
+    """
+    return (severity or "").upper() in AI_ENABLED_SEVERITIES
+
+
+# ── Alert lifecycle policy ───────────────────────────────────────────────────
+# Only these severities carry the IT ack -> resolve lifecycle. Everything below
+# HIGH is auto-closed at ingest (resolved by SYSTEM_ACTOR) — informational, no
+# IT action required, so it never sits "Open / Pending" or inflates the
+# open-alerts KPI. Kept SEPARATE from AI_ENABLED_SEVERITIES even though the
+# values coincide today: AI-budget policy and lifecycle policy are different
+# concerns and may diverge.
+ACTIONABLE_SEVERITIES = {"HIGH", "CRITICAL"}
+
+# Sentinel actor + note for a system auto-close. resolved_by == SYSTEM_ACTOR is
+# what the UI and reports use to tell an automatic closure from a human resolve.
+SYSTEM_ACTOR = "system"
+AUTO_CLOSE_NOTE = "Auto-closed: informational severity — no IT action required."
+
+
+def requires_ack(severity: str) -> bool:
+    """True if this severity needs a human IT ack/resolve lifecycle.
+
+    False for MEDIUM/LOW/INFORMATIONAL, which are auto-closed at ingest.
+    """
+    return (severity or "").upper() in ACTIONABLE_SEVERITIES
 
 # ── Thresholds ───────────────────────────────────────────────────────────────
 BUSINESS_START          = 8       # 08:00 PHT — after-hours escalation boundary

@@ -123,6 +123,7 @@ def translate(
     rule_id: str,
     description: str,
     device_name: str,
+    use_ai: bool = True,
 ) -> tuple[str, str, str]:
     """
     Translate a Wazuh alert into plain English for the manager dashboard.
@@ -133,7 +134,21 @@ def translate(
 
     Pipeline: cache → providers (in order from config.DEFAULT_AI_PROVIDERS) →
     static template. Static is the guaranteed last resort and never raises.
+
+    use_ai=False skips the whole AI chain and returns the static template
+    directly — the caller passes this for severities outside
+    config.AI_ENABLED_SEVERITIES so free-tier quota is spent only on
+    HIGH/CRITICAL alerts. The static path is identical to the AI-outage
+    fallback, so a MEDIUM alert reads exactly as it would if every provider
+    were down.
     """
+    if not use_ai:
+        text = _get_static_template(rule_id, device_name)
+        return text, "static", (
+            "AI skipped: severity below config.AI_ENABLED_SEVERITIES. "
+            "Static template used (no provider call, no quota spent)."
+        )
+
     prompt = _build_prompt(description)
     # Round 3: providers come from the DB (ai_providers table) instead of
     # config.DEFAULT_AI_PROVIDERS. The chain runner doesn't change — it
