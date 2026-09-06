@@ -5,7 +5,7 @@
 import logging
 from datetime import datetime, timedelta
 
-from flask import Blueprint, redirect, render_template, request, url_for
+from flask import Blueprint, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required
 
 import _request_cache
@@ -22,12 +22,74 @@ logger = logging.getLogger("insightshield.web.dashboards")
 
 bp = Blueprint("dashboards", __name__)
 
+ALERTS_PER_PAGE = 50
+
+# The filter keys a toolbar submit carries. `applied` is the marker the shared
+# _alert_filters.html form adds so we can tell a real submit from a bare nav.
+_FILTER_KEYS = ("status", "severity", "q", "hide_low")
+
+
+def _alert_filters_from_request() -> dict:
+    """Read the alert-list filters, persisted per session so they survive
+    navigation — the fix for "Hide low severity" reverting when you open an
+    alert or hit another page.
+
+    - applied=1 (a real toolbar submit) -> authoritative from args, saved to
+      the session (records hide_low=False when unchecked, which sends no field).
+    - no filter params at all (a bare nav / Dashboard link) -> load the
+      remembered filters from the session.
+    - some params but no marker (a shared/deep link) -> honour the params
+      present, but don't overwrite the saved preference.
+    """
+    args = request.args
+
+    def _from_args() -> dict:
+        return {
+            "status":   args.get("status", "").strip(),
+            "severity": args.get("severity", "").strip(),
+            "q":        args.get("q", "").strip(),
+            "hide_low": args.get("hide_low") == "1",
+        }
+
+    if args.get("applied") == "1":
+        filters = _from_args()
+        session["alert_filters"] = filters
+        return filters
+    if not any(k in args for k in _FILTER_KEYS):
+        saved = session.get("alert_filters") or {}
+        return {
+            "status":   saved.get("status", ""),
+            "severity": saved.get("severity", ""),
+            "q":        saved.get("q", ""),
+            "hide_low": bool(saved.get("hide_low", False)),
+        }
+    return _from_args()
+
+
+def _alerts_pager_filtered(filters: dict, page: int = 1) -> bool:
+    """Whether any filter (or a non-first page) is active — drives the Clear link."""
+    return bool(filters["status"] or filters["severity"]
+                or filters["q"] or filters["hide_low"] or page > 1)
+
 
 @bp.route("/dashboard/manager")
 @login_required
 @role_required(ROLE_MANAGER)
 def dashboard_manager():
-    alerts = db.get_recent_alerts(limit=50)
+    # Server-side filtering (same db.search_alerts path as the IT dashboard),
+    # persisted per session. The manager feed is a capped scroll list, not a
+    # paged table, so it keeps a single 50-row window — no pager UI — but the
+    # Status / Severity / Hide-low controls now actually reach the whole table.
+    filters = _alert_filters_from_request()
+    alerts = db.search_alerts(
+        status=filters["status"] or None,
+        severity=filters["severity"] or None,
+        q=filters["q"] or None,
+        hide_low=filters["hide_low"],
+        limit=ALERTS_PER_PAGE,
+        offset=0,
+    )
+    pager = {"filtered": _alerts_pager_filtered(filters)}
     score = health_score.calculate()
     agents = get_agent_status()
 
@@ -37,9 +99,13 @@ def dashboard_manager():
         "total": len(recent_24h),
         "critical": sum(1 for a in recent_24h if a.get("severity") == "CRITICAL"),
         "high": sum(1 for a in recent_24h if a.get("severity") == "HIGH"),
+        # "Open" means not resolved — matching db.count_open_alerts and the IT
+        # dashboard. Keyed on resolved_at (not acknowledged_at) so auto-closed
+        # sub-HIGH alerts drop out of the count and an acked-but-unresolved
+        # HIGH/CRITICAL still shows as open work.
         "open": sum(
             1 for a in recent_24h
-            if not a.get("acknowledged_at")
+            if not a.get("resolved_at")
         ),
     }
 
@@ -58,9 +124,10 @@ def dashboard_manager():
         agents=agents,
         summary=summary,
         devices=devices,
+        filters=filters,
+        pager=pager,
     )
 
-ALERTS_PER_PAGE = 50
 
 @bp.route("/dashboard/it")
 @login_required
@@ -72,14 +139,10 @@ def dashboard_it():
     # Filters and paging run in SQL, not in the browser. The toolbar used to
     # set row.hidden on the 50 rows already rendered, so a CRITICAL that had
     # fallen past row 50 was unreachable by every control on the page.
-    # Same request.args -> filters dict -> template convention admin_settings()
-    # uses, so the toolbar can round-trip its own state through the URL.
-    filters = {
-        "status":   request.args.get("status", "").strip(),
-        "severity": request.args.get("severity", "").strip(),
-        "q":        request.args.get("q", "").strip(),
-        "hide_low": request.args.get("hide_low") == "1",
-    }
+    # Filters now come from the shared helper, which persists them in the
+    # session — so "Hide low severity" (and the rest) survive opening an alert
+    # or clicking a bare Dashboard link, instead of reverting on every nav.
+    filters = _alert_filters_from_request()
     total = db.count_alerts(
         status=filters["status"] or None,
         severity=filters["severity"] or None,

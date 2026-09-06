@@ -128,14 +128,15 @@
     </span>
   </div>
 
-  {# The Round-G filter toolbar that stood here is gone. It reused the IT
-     dashboard's control IDs so ui.js's shared handler would fire on this
-     page too; that handler has been deleted, because filtering the 50
-     already-rendered rows in the browser could never reach an alert past
-     row 50. The IT dashboard filters in SQL now (db.search_alerts).
-     dashboard_manager() deliberately stays on get_recent_alerts(50) — it is
-     an at-a-glance surface, not the operational one — so rather than leave
-     four widgets that silently do nothing, they are removed. #}
+  {# Filter toolbar restored — server-side this time. The Round-G version was
+     removed because it filtered the 50 already-rendered rows in the browser and
+     could never reach an alert past row 50. This shared partial submits to the
+     server (dashboard_manager -> db.search_alerts, the same path the IT
+     dashboard uses), so Status / Severity / Hide-low reach the whole table. And
+     dashboards._alert_filters_from_request() persists the choice in the session
+     so "Hide low severity" no longer reverts when the manager opens an alert or
+     navigates to another page. #}
+  {% include "_alert_filters.html" %}
 
   {# UI rework Round-C tweak: cap the manager alert feed at .table-scroll's
      420px ceiling. The header above ("All recent alerts" + 15s heartbeat)

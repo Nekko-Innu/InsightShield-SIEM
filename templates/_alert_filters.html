@@ -1,0 +1,74 @@
+{# Shared alert-list toolbar — Status / Severity / Hide-low / search.
+   Included by both dashboard_it.html and dashboard_manager.html.
+
+   GET form, server-side filtering: the server does the filtering and the URL
+   carries the state (linkable, survives the SSE fallback's reload). action=""
+   self-submits to the current path, so this one partial serves both dashboards.
+
+   Control ids (alert-filters, status-filter, sev-filter, hide-low-toggle,
+   search) are load-bearing — static/ui.js and dashboard-it-realtime.js key off
+   them. Do not rename without updating both.
+
+   Persistence: dashboards._alert_filters_from_request() reads `applied=1` as an
+   explicit submit and remembers the choice in the session, so the toggle no
+   longer reverts when you open an alert or hit another page. #}
+<form method="get" action="" id="alert-filters">
+  {# Changing any filter goes back to page 1 — page 7 of an unfiltered list
+     is rarely page 7 of a filtered one. #}
+  <input type="hidden" name="page" value="1">
+  {# Marks this as a real form submit (vs. a bare nav to the dashboard) so the
+     server persists the choice — including "hide_low unchecked", which sends
+     no field of its own. #}
+  <input type="hidden" name="applied" value="1">
+<section class="bg-white rounded-xl shadow-card border border-surface-200 p-4 mb-4
+                flex flex-col md:flex-row md:items-center gap-3 justify-between min-w-0">
+  <div class="flex flex-wrap items-center gap-3">
+    <div class="flex items-center gap-2">
+      <label for="status-filter" class="text-sm text-slate-600">Status:</label>
+      <select id="status-filter" name="status"
+              class="rounded-md border border-surface-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none">
+        <option value="">All alerts</option>
+        <option value="open"   {% if filters.status == 'open' %}selected{% endif %}>Open only</option>
+        <option value="closed" {% if filters.status == 'closed' %}selected{% endif %}>Closed only</option>
+      </select>
+    </div>
+    <div class="flex items-center gap-2">
+      <label for="sev-filter" class="text-sm text-slate-600">Severity:</label>
+      <select id="sev-filter" name="severity"
+              class="rounded-md border border-surface-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none">
+        <option value="">All severities</option>
+        {% for sev in ['INFORMATIONAL', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] %}
+        <option value="{{ sev }}" {% if filters.severity == sev %}selected{% endif %}>{{ sev|capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {# A real checkbox, styled with peer-checked: — the button it replaced
+       needed eight classList.toggle calls in ui.js to fake this state. #}
+    <label class="inline-flex items-center cursor-pointer">
+      <input type="checkbox" id="hide-low-toggle" name="hide_low" value="1"
+             {% if filters.hide_low %}checked{% endif %}
+             class="peer sr-only">
+      <span class="px-3 py-1.5 rounded-md text-sm border border-surface-200 bg-white text-slate-700
+                   hover:bg-surface-50 peer-checked:bg-brand-600 peer-checked:text-white
+                   peer-checked:border-brand-600 peer-checked:hover:bg-brand-700
+                   peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500">
+        Hide low severity
+      </span>
+    </label>
+  </div>
+  <div class="flex flex-wrap items-center gap-2 justify-end">
+    <label for="search" class="sr-only">Search alerts</label>
+    {# Enter submits — no keystroke listener, no debounce to tune. #}
+    <input id="search" name="q" type="search" placeholder="Search alerts…"
+           value="{{ filters.q }}"
+           class="rounded-md border border-surface-300 px-3 py-2 text-sm w-48 md:w-56 focus:border-brand-500 focus:outline-none">
+    <button type="submit" class="px-3 py-2 rounded-md text-sm border border-surface-200 bg-white text-slate-700 hover:bg-surface-50">
+      Filter
+    </button>
+    {% if pager.filtered %}
+    <a href="{{ request.path }}"
+       class="px-3 py-2 rounded-md text-sm text-slate-600 hover:text-slate-900 underline">Clear</a>
+    {% endif %}
+  </div>
+</section>
+</form>

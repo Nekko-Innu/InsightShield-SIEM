@@ -9,72 +9,10 @@
 {% block content %}
 <h1 class="sr-only">IT Admin Console</h1>
 
-<!-- Toolbar — UI rework Round C: Status/Severity dropdowns + Hide-low toggle.
-     The legacy sim-only filter is dropped per Round-1 sim removal.
-     Export CSV + Security Audit Report links removed from this toolbar in
-     Round C since Round B added them as icon buttons in the header.
-
-     Now a GET form. The old version filtered in the browser with
-     row.hidden over whatever 50 rows happened to be rendered, so an alert
-     past row 50 could not be reached by any control on this page. The
-     server does the filtering; the URL carries the state, which also makes
-     a filtered view linkable and survives the SSE fallback's reload. -->
-<form method="get" action="{{ url_for('dashboards.dashboard_it') }}" id="alert-filters">
-  {# Changing any filter goes back to page 1 — page 7 of an unfiltered list
-     is rarely page 7 of a filtered one. #}
-  <input type="hidden" name="page" value="1">
-<section class="bg-white rounded-xl shadow-card border border-surface-200 p-4 mb-4
-                flex flex-col md:flex-row md:items-center gap-3 justify-between min-w-0">
-  <div class="flex flex-wrap items-center gap-3">
-    <div class="flex items-center gap-2">
-      <label for="status-filter" class="text-sm text-slate-600">Status:</label>
-      <select id="status-filter" name="status"
-              class="rounded-md border border-surface-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none">
-        <option value="">All alerts</option>
-        <option value="open"   {% if filters.status == 'open' %}selected{% endif %}>Open only</option>
-        <option value="closed" {% if filters.status == 'closed' %}selected{% endif %}>Closed only</option>
-      </select>
-    </div>
-    <div class="flex items-center gap-2">
-      <label for="sev-filter" class="text-sm text-slate-600">Severity:</label>
-      <select id="sev-filter" name="severity"
-              class="rounded-md border border-surface-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none">
-        <option value="">All severities</option>
-        {% for sev in ['INFORMATIONAL', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] %}
-        <option value="{{ sev }}" {% if filters.severity == sev %}selected{% endif %}>{{ sev|capitalize }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    {# A real checkbox, styled with peer-checked: — the button it replaced
-       needed eight classList.toggle calls in ui.js to fake this state. #}
-    <label class="inline-flex items-center cursor-pointer">
-      <input type="checkbox" id="hide-low-toggle" name="hide_low" value="1"
-             {% if filters.hide_low %}checked{% endif %}
-             class="peer sr-only">
-      <span class="px-3 py-1.5 rounded-md text-sm border border-surface-200 bg-white text-slate-700
-                   hover:bg-surface-50 peer-checked:bg-brand-600 peer-checked:text-white
-                   peer-checked:border-brand-600 peer-checked:hover:bg-brand-700
-                   peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500">
-        Hide low severity
-      </span>
-    </label>
-  </div>
-  <div class="flex flex-wrap items-center gap-2 justify-end">
-    <label for="search" class="sr-only">Search alerts</label>
-    {# Enter submits — no keystroke listener, no debounce to tune. #}
-    <input id="search" name="q" type="search" placeholder="Search alerts…"
-           value="{{ filters.q }}"
-           class="rounded-md border border-surface-300 px-3 py-2 text-sm w-48 md:w-56 focus:border-brand-500 focus:outline-none">
-    <button type="submit" class="px-3 py-2 rounded-md text-sm border border-surface-200 bg-white text-slate-700 hover:bg-surface-50">
-      Filter
-    </button>
-    {% if pager.filtered %}
-    <a href="{{ url_for('dashboards.dashboard_it') }}"
-       class="px-3 py-2 rounded-md text-sm text-slate-600 hover:text-slate-900 underline">Clear</a>
-    {% endif %}
-  </div>
-</section>
-</form>
+{# Toolbar extracted to the shared _alert_filters.html so the manager dashboard
+   reuses the exact same Status/Severity/Hide-low controls. action="" self-submits
+   to this page. #}
+{% include "_alert_filters.html" %}
 
 <!-- KPI strip -->
 {# Round D follow-up: kpis tuple gains a 4th element `value_color`. When
