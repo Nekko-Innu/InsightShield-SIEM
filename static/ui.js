@@ -312,6 +312,29 @@
     }, 15000);
   }
 
+  // ---------- Pager jump-to-page ----------
+  // Enter or the Go button navigates to the typed page, preserving whatever
+  // filters are already in the query string (status/severity/hide_low/q) by
+  // editing only the `page` param on the current URL. Clamped to
+  // [1, data-last-page]; the server also clamps, so this is just UX polish.
+  const pagerJump = document.getElementById('pager-jump');
+  if (pagerJump) {
+    const jumpTo = () => {
+      const last = parseInt(pagerJump.dataset.lastPage || '1', 10) || 1;
+      let n = parseInt(pagerJump.value, 10);
+      if (!Number.isFinite(n)) return;
+      n = Math.min(Math.max(n, 1), last);
+      const url = new URL(window.location.href);
+      url.searchParams.set('page', n);
+      window.location.assign(url.toString());
+    };
+    pagerJump.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); jumpTo(); }
+    });
+    const pagerGo = document.getElementById('pager-jump-go');
+    if (pagerGo) pagerGo.addEventListener('click', jumpTo);
+  }
+
   // ---------- Password show/hide (legacy click-to-toggle) ----------
   // Kept for any page still using data-toggle-password. UI rework Round C
   // moved login.html to the hold-to-show pattern below; this handler stays

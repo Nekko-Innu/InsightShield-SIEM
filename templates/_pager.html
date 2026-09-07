@@ -22,20 +22,40 @@
   </p>
   <div class="flex items-center gap-2">
     {% if pager.page > 1 %}
+      <a href="{{ url_with(page=1) }}" rel="first" aria-label="First page"
+         class="px-3 py-1.5 rounded-md border border-surface-200 bg-white text-slate-700 hover:bg-surface-100">⇤ First</a>
       <a href="{{ url_with(page=pager.page - 1) }}" rel="prev"
          class="px-3 py-1.5 rounded-md border border-surface-200 bg-white text-slate-700 hover:bg-surface-100">Prev</a>
     {% else %}
       {# A disabled anchor is not a thing; a span is. #}
       <span aria-disabled="true"
+            class="px-3 py-1.5 rounded-md border border-surface-200 bg-surface-100 text-slate-400 cursor-not-allowed">⇤ First</span>
+      <span aria-disabled="true"
             class="px-3 py-1.5 rounded-md border border-surface-200 bg-surface-100 text-slate-400 cursor-not-allowed">Prev</span>
     {% endif %}
-    <span class="text-slate-500 tabular-nums">Page {{ pager.page }} of {{ pager.last_page }}</span>
+
+    {# Jump-to-page: Enter or Go navigates via static/ui.js, which sets the `page`
+       query param on the current URL so the active filters are preserved. The
+       server clamps out-of-range values, and ui.js clamps to data-last-page. #}
+    <span class="text-slate-500 tabular-nums whitespace-nowrap">Page</span>
+    <input id="pager-jump" type="number" min="1" max="{{ pager.last_page }}"
+           data-last-page="{{ pager.last_page }}" value="{{ pager.page }}"
+           aria-label="Go to page"
+           class="w-16 rounded-md border border-surface-300 px-2 py-1.5 text-sm tabular-nums focus:border-brand-500 focus:outline-none">
+    <span class="text-slate-500 tabular-nums whitespace-nowrap">of {{ pager.last_page }}</span>
+    <button type="button" id="pager-jump-go"
+            class="px-3 py-1.5 rounded-md border border-surface-200 bg-white text-slate-700 hover:bg-surface-100">Go</button>
+
     {% if pager.page < pager.last_page %}
       <a href="{{ url_with(page=pager.page + 1) }}" rel="next"
          class="px-3 py-1.5 rounded-md border border-surface-200 bg-white text-slate-700 hover:bg-surface-100">Next</a>
+      <a href="{{ url_with(page=pager.last_page) }}" rel="last" aria-label="Last page"
+         class="px-3 py-1.5 rounded-md border border-surface-200 bg-white text-slate-700 hover:bg-surface-100">Last ⇥</a>
     {% else %}
       <span aria-disabled="true"
             class="px-3 py-1.5 rounded-md border border-surface-200 bg-surface-100 text-slate-400 cursor-not-allowed">Next</span>
+      <span aria-disabled="true"
+            class="px-3 py-1.5 rounded-md border border-surface-200 bg-surface-100 text-slate-400 cursor-not-allowed">Last ⇥</span>
     {% endif %}
   </div>
 </div>
