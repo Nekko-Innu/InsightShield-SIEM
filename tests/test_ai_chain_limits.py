@@ -97,6 +97,42 @@ def test_400_reads_as_config_error_not_ratelimit(monkeypatch):
     assert rate_limit.window_count("testprov") < config.AI_PROVIDER_RATE_LIMIT_DEFAULT
 
 
+def test_first_provider_attempted_when_budget_equals_floor(monkeypatch):
+    # Regression: with budget_s == AI_MIN_PROVIDER_S, the first provider must
+    # still be attempted. The ingest path (AI_INGEST_BUDGET_S == AI_MIN_PROVIDER_S)
+    # used to exhaust before any attempt, so every HIGH/CRITICAL manager
+    # translation silently fell back to static.
+    called = []
+    monkeypatch.setattr(_ai_chain, "_call_provider",
+                        lambda p, *a, **k: called.append(p["label"]) or "ok text")
+    text, provider, reasoning = _ai_chain.run_chain(
+        prompt="x", providers=[_provider("Groq")], validator_fn=lambda t: True,
+        budget_s=config.AI_MIN_PROVIDER_S,
+    )
+    assert called == ["Groq"]
+    assert provider == "Groq"
+    assert text == "ok text"
+
+
+def test_floor_still_skips_second_provider_on_tight_budget(monkeypatch):
+    # The floor is not gone — it applies from the 2nd provider on. First provider
+    # is attempted (fails validation), then the budget-equals-floor check stops
+    # the chain before the second is tried.
+    called = []
+    monkeypatch.setattr(_ai_chain, "_call_provider",
+                        lambda p, *a, **k: called.append(p["label"]) or "bad")
+    text, provider, reasoning = _ai_chain.run_chain(
+        prompt="x",
+        providers=[_provider("Groq"), _provider("OpenRouter")],
+        validator_fn=lambda t: False,  # force fall-through past the first
+        budget_s=config.AI_MIN_PROVIDER_S,
+    )
+    assert called == ["Groq"]  # OpenRouter never attempted
+    assert provider == _ai_chain.AI_CHAIN_EXHAUSTED
+    assert "budget exhausted before OpenRouter" in reasoning.replace("\n", " ") \
+        or "exhausted before OpenRouter" in reasoning
+
+
 def test_scrub_removes_key_shapes():
     dirty = "error Bearer sk-abc123DEF token AIzaSyXYZ gsk_secretval end"
     clean = _ai_chain._scrub(dirty)

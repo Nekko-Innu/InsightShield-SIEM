@@ -248,6 +248,9 @@ IT_RECOMMENDER_MAX_CONCURRENCY = int(
 AI_CHAIN_BUDGET_S = 25.0
 # Don't start a provider we cannot give a fair chance — better to stop the chain
 # and fall back than to burn the remaining 2s on a request that will time out.
+# Applied only from the SECOND provider onward (see _ai_chain.run_chain): the
+# first active provider is always attempted, so an ingest budget equal to this
+# floor still gets one real Groq call instead of exhausting before any attempt.
 AI_MIN_PROVIDER_S = 5.0
 # The ingest path is much tighter: groq_translator runs inside the
 # /wazuh-webhook POST, and the Wazuh integrator gives up at TIMEOUT_S = 10

@@ -135,11 +135,19 @@ def run_chain(
         # failure, and it flips the instant someone adds a provider in Settings.
         return AI_CHAIN_EXHAUSTED, AI_CHAIN_EXHAUSTED, "\n".join(reasoning)
 
-    for provider in active:
+    for idx, provider in enumerate(active):
         label = provider["label"]
 
         remaining = deadline - time.monotonic()
-        if remaining < config.AI_MIN_PROVIDER_S:
+        # The floor applies from the SECOND provider onward. It exists to avoid
+        # starting provider #2/#3 with scraps of budget left — never to skip the
+        # only attempt. Without the idx>0 guard, the ingest budget
+        # (AI_INGEST_BUDGET_S == AI_MIN_PROVIDER_S == 5s) always exhausts here
+        # before the first provider is tried, because a few ms elapse between
+        # setting `deadline` and this check, so every HIGH/CRITICAL manager
+        # translation silently fell back to static. The first provider gets
+        # whatever budget there is, capped at 30s by _call_provider.
+        if idx > 0 and remaining < config.AI_MIN_PROVIDER_S:
             reasoning.append(
                 f"Budget of {budget_s:.0f}s exhausted before {label} "
                 f"({remaining:.1f}s left). Stopping chain."
