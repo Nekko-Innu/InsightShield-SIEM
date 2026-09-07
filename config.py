@@ -124,8 +124,21 @@ COOKIES_REQUIRE_HTTPS = os.environ.get(
 GROQ_MODEL       = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GEMINI_MODEL     = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 # ':free' OpenRouter slugs drift as models are rotated out; override via env
-# when one 404s rather than editing this line.
-OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
+# when one 404s rather than editing this line. meta-llama/llama-3.1-8b-instruct:free
+# was retired (OpenRouter now 404s it and points at the paid slug), so the
+# default moved to a currently-free model. See KNOWN_BAD_AI_MODELS below.
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "nvidia/nemotron-3.5-lightning:free")
+
+# Output token ceiling for every provider request. Was hardcoded at 200 in
+# _ai_chain._call_openai_compat, which is plenty for our <=100-word answers from
+# an instruction model — but fatal for a REASONING model (Groq's gpt-oss / qwen3
+# spend tokens on an internal reasoning channel first). At 200 the reasoning ate
+# the whole budget and `content` came back empty, so the validator rejected it as
+# "empty input" and the alert fell to the static template. 1024 leaves room for
+# the reasoning plus the answer; instruction models still stop at their natural
+# length, so raising it only ever helps. Kept well under the 8K TPM free-tier
+# window so one call can't trip request_too_large on its own.
+AI_MAX_TOKENS = int(os.environ.get("AI_MAX_TOKENS", "1024"))
 
 # Slugs we have shipped or seeded that no provider actually serves. The one-shot
 # scripts/repair_providers.py rewrites any ai_providers row on this list to the
@@ -134,8 +147,9 @@ OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-i
 # it may still be valid on some Groq tiers, and a false rewrite of a working row
 # is worse than leaving it — only slugs that are definitely dead go here.
 KNOWN_BAD_AI_MODELS = {
-    "google/gemma-4-26b-a4b-it:free",  # gemma-4 does not exist
-    "openrouter/free",                 # not a real model id
+    "google/gemma-4-26b-a4b-it:free",       # gemma-4 does not exist
+    "openrouter/free",                      # not a real model id
+    "meta-llama/llama-3.1-8b-instruct:free",  # retired: OpenRouter 404s it, free tier gone
 }
 
 # Display label for the primary-provider KPI tile on the IT dashboard. Round 3

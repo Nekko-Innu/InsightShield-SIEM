@@ -266,12 +266,22 @@ def _call_openai_compat(provider: dict, prompt: str, timeout_s: float = 30.0) ->
         "Content-Type": "application/json",
         provider["auth_header"]: provider["auth_prefix"] + provider["api_key"],
     }
+    model = provider.get("model", "")
     body = {
-        "model": provider["model"],
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3,
-        "max_tokens": 200,
+        # config, not a literal 200: a reasoning model burns the budget on its
+        # reasoning channel before emitting the answer, so 200 returned empty
+        # content and every alert fell to static. See config.AI_MAX_TOKENS.
+        "max_tokens": config.AI_MAX_TOKENS,
     }
+    # gpt-oss exposes a reasoning-effort knob (Groq honours it); "low" keeps the
+    # reasoning short so the <=100-word answer lands inside the budget instead of
+    # being crowded out. Sent ONLY to models that accept it — a plain OpenAI /
+    # OpenRouter model would 400 on an unknown field, so this is gated on the slug.
+    if "gpt-oss" in model:
+        body["reasoning_effort"] = "low"
     # allow_redirects=False is load-bearing. _reject_unsafe_base_url validates
     # the hostname that was typed, and requests then follows redirects by
     # default — so https://attacker.tld/ passes the check and 302s to
