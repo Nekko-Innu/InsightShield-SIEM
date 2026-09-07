@@ -275,7 +275,18 @@ def process_alert(payload: dict) -> int:
             return -1
 
     # Determine attack type
-    attack_type = payload.get("attack_type", _infer_attack_type(rule_id))
+    attack_type = payload.get("attack_type") or _infer_attack_type(rule_id)
+    # Unmapped Wazuh rules have no STRIDE tag, and used to display the bare word
+    # "Unknown". The integrator already sends the real Wazuh rule description as
+    # `description` (custom-insightshield.py), so show that instead — e.g.
+    # "Netstat listened ports status changed" beats "Unknown". Capped at the
+    # attack_type column's 64 chars. Skipped when description is the integrator's
+    # own "Wazuh rule <id>" placeholder (no rule description was available), since
+    # that just repeats the rule id already shown next to it.
+    if attack_type == "Unknown":
+        desc = (payload.get("description") or "").strip()
+        if desc and not desc.startswith(f"Wazuh rule {rule_id}"):
+            attack_type = desc[:64]
 
     logger.info(
         "Processing alert: rule_id=%s severity=%s device=%s",
