@@ -95,8 +95,15 @@
     Wazuh payload below and follow your standard runbook.
   </p>
   {% else %}
+  {# Round K follow-up: this branch used to promise steps that were never
+     coming. A blank recommendation on an alert older than a couple of minutes
+     means ingest skipped it — a burst, a provider outage, a worker restart
+     mid-generation — and nothing retried. scheduler._it_rec_backfill does retry
+     now, so the honest line is that it is queued, not that it is in flight. #}
   <p class="text-sm text-slate-500 italic">
-    Generating investigation steps… refresh in a few seconds.
+    No investigation steps yet. A fresh alert generates them within a few
+    seconds; one that arrived during a burst is picked up by the periodic
+    backfill sweep. Refresh to check.
   </p>
   {% endif %}
 </section>

@@ -137,6 +137,25 @@ def init_scheduler() -> None:
     except Exception as e:
         logger.warning("Could not register authz probe sweep: %s", e)
 
+    # IT-recommendation backfill. Ingest is fire-and-forget: a burst that outran
+    # the reuse window, a provider outage, or a worker restart mid-generation all
+    # leave it_recommendation NULL with nothing to retry it. This sweep is that
+    # retry. Registered only when both the recommender and the interval are on,
+    # so IT_REC_BACKFILL_MIN=0 is a complete kill switch.
+    if config.IT_RECOMMENDER_ENABLED and config.IT_REC_BACKFILL_MIN > 0:
+        try:
+            _scheduler.add_job(
+                _it_rec_backfill,
+                trigger="interval",
+                minutes=config.IT_REC_BACKFILL_MIN,
+                id="it_rec_backfill",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+        except Exception as e:
+            logger.warning("Could not register IT recommendation backfill: %s", e)
+
     # Job failures used to be invisible: only the escalation job wrapped itself,
     # so an exception in the backup or agent-status job surfaced in
     # APScheduler's own logger and never reached error_log or the Errors tab.
@@ -236,6 +255,61 @@ def _authz_probe_sweep() -> None:
         except Exception as e:
             # One bad source must not abandon the rest of the sweep.
             logger.error("Authz probe alert failed for ip=%s: %s", ip, e)
+
+
+def _it_rec_backfill() -> None:
+    """Fill in IT recommendations that ingest left blank.
+
+    Runs in insightshield-worker, which owns the scheduler, so it never competes
+    with a live webhook for the web workers' _ITREC_SEMAPHORE — and a slow
+    provider here delays nothing a browser is waiting on.
+
+    Same two-step order as ingest: reuse a sibling first, spend a call only if
+    there is nothing to copy. IT_REC_BACKFILL_BATCH per sweep on purpose — this
+    drains a backlog slowly inside the free tier rather than replaying a burst at
+    full speed, and _ai_chain's per-provider rate limiter is still the hard
+    ceiling underneath.
+    """
+    import db
+    import it_recommender
+    import wazuh_receiver
+
+    alerts = db.get_alerts_missing_it_recommendation(
+        max_age_hours=24, limit=config.IT_REC_BACKFILL_BATCH,
+    )
+    if not alerts:
+        return
+
+    logger.info("IT rec backfill: %d alert(s) without recommendations", len(alerts))
+    for alert in alerts:
+        alert_id = alert["id"]
+        rule_id = str(alert.get("rule_id") or "")
+        device_name = alert.get("device_name") or ""
+        try:
+            if wazuh_receiver._reuse_sibling_recommendation(
+                alert_id, rule_id, device_name
+            ):
+                continue
+            text, provider = it_recommender.recommend(
+                rule_id, alert.get("raw_alert") or "", device_name
+            )
+            if provider == config.AI_CHAIN_EXHAUSTED:
+                # Leave the row NULL rather than writing the sentinel: the next
+                # sweep should try again once the negative cache expires, and
+                # a stored sentinel would make this alert invisible to the very
+                # query that found it.
+                logger.warning(
+                    "IT rec backfill: chain exhausted (alert_id=%s), leaving blank",
+                    alert_id,
+                )
+                continue
+            db.update_it_recommendation(alert_id, text, provider_used=provider)
+            logger.info(
+                "IT rec backfill: filled alert_id=%s provider=%s", alert_id, provider,
+            )
+        except Exception as e:
+            # One bad alert must not abort the rest of the batch.
+            logger.warning("IT rec backfill failed (alert_id=%s): %s", alert_id, e)
 
 
 def _escalation_sweep() -> None:
