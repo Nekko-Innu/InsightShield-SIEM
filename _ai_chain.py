@@ -197,9 +197,26 @@ def run_chain(
             continue
 
         try:
-            timeout_s = min(remaining, 30.0)
+            # Fair share, not "everything that is left". A hanging first
+            # provider used to consume the entire budget — with three providers
+            # configured and Groq read-timing-out at 4.99s of a 5s window, the
+            # chain logged "budget exhausted before Gemini (-0.0s left)" and the
+            # second and third providers had never run, on any call, ever.
+            #
+            # Each remaining provider gets budget/left, floored at
+            # AI_MIN_PROVIDER_S so this can never shorten a slice below what the
+            # old code gave: on the 5s ingest budget the floor wins and provider
+            # one still gets the full 5s (unchanged behaviour), while on the 25s
+            # retry three providers get ~8.3s each and every one of them
+            # actually gets a turn.
+            providers_left = len(active) - idx
+            timeout_s = min(
+                remaining, 30.0,
+                max(remaining / providers_left, config.AI_MIN_PROVIDER_S),
+            )
             reasoning.append(
-                f"Attempting {label} ({provider['model']}, {timeout_s:.0f}s)..."
+                f"Attempting {label} ({provider['model']}, {timeout_s:.0f}s"
+                f" of {remaining:.0f}s left)..."
             )
             text = _call_provider(provider, prompt, timeout_s)
             if validator_fn(text):
@@ -309,7 +326,41 @@ def _call_openai_compat(provider: dict, prompt: str, timeout_s: float = 30.0) ->
     # body snippet instead.
     if r.status_code >= 400:
         raise ProviderError(r.status_code, _scrub(r.text))
-    return r.json()["choices"][0]["message"]["content"].strip()
+
+    # A 200 is not proof of an answer. OpenRouter in particular returns HTTP 200
+    # with {"error": {...}} and no `choices` when the upstream model is
+    # unavailable or a :free variant is throttled, and reasoning models return
+    # `content: null` with the text on a separate channel. Both used to reach the
+    # caller as a bare KeyError / AttributeError, so ai_reasoning recorded
+    # "FAILED [KeyError]" — a class name that tells the operator nothing about
+    # which provider is misconfigured or why. Same ProviderError shape as a real
+    # HTTP failure, so the chain falls through identically but says what happened.
+    try:
+        body = r.json()
+    except ValueError:
+        raise ProviderError(r.status_code, f"non-JSON body: {_scrub(r.text)}")
+
+    if isinstance(body.get("error"), dict):
+        err = body["error"]
+        raise ProviderError(
+            int(err.get("code") or r.status_code),
+            _scrub(str(err.get("message") or err)),
+        )
+
+    choices = body.get("choices") or []
+    if not choices:
+        raise ProviderError(r.status_code, f"no choices in response: {_scrub(str(body))}")
+
+    content = (choices[0].get("message") or {}).get("content")
+    if not content or not content.strip():
+        # Empty content with a finish_reason is the reasoning-model failure mode
+        # AI_MAX_TOKENS=1024 exists to prevent; report it as itself rather than
+        # letting the validator call it "empty input".
+        finish = choices[0].get("finish_reason") or "unknown"
+        raise ProviderError(
+            r.status_code, f"empty content (finish_reason={finish})",
+        )
+    return content.strip()
 
 
 def _call_gemini_v1beta(provider: dict, prompt: str, timeout_s: float = 30.0) -> str:
@@ -342,7 +393,22 @@ def _call_gemini_v1beta(provider: dict, prompt: str, timeout_s: float = 30.0) ->
         if isinstance(code, int):
             raise ProviderError(code, _scrub(str(getattr(e, "message", e) or e)))
         raise
-    return response.text.strip()
+    # response.text is None when the model produced no usable candidate — a
+    # safety block, or a thinking model (gemini-2.5-flash thinks by default)
+    # spending its whole output budget before emitting an answer. .strip() on
+    # None reached the chain as AttributeError, which reads like a bug in our
+    # code rather than a provider outcome.
+    text = getattr(response, "text", None)
+    if not text or not text.strip():
+        reason = "no candidates"
+        try:
+            candidates = getattr(response, "candidates", None) or []
+            if candidates:
+                reason = str(getattr(candidates[0], "finish_reason", reason))
+        except Exception:
+            pass
+        raise ProviderError(200, f"empty response ({reason})")
+    return text.strip()
 
 
 def _call_anthropic_messages(provider: dict, prompt: str) -> str:
