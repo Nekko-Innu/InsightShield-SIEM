@@ -84,7 +84,12 @@
   <td class="px-3 py-2 font-mono text-xs truncate" title="{{ a.device_name }}">{{ a.device_name }}</td>
   <td class="px-3 py-2 font-mono text-xs truncate" title="{{ derive_attacker_ip(a) or '—' }}">{{ derive_attacker_ip(a) or "—" }}</td>
   <td class="px-3 py-2 font-mono text-xs truncate" title="{{ a.rule_id }}">{{ a.rule_id }}</td>
-  <td class="px-3 py-2 truncate" title="{{ _tip|trim }}">Alert #{{ a.id }} · Rule {{ a.rule_id }} · {{ a.attack_type|default('Alert') }}</td>
+  {# Round K: dropped the "Alert #" / "Rule NNNN" boilerplate. The rule id already
+     has its own column two cells left, and the prefix words buried the one thing
+     the operator scans for — the threat name. Id kept as a muted mono tag for
+     cross-referencing; plain text, not a link, because the whole row already
+     navigates to /alert/<id> via the delegated handler in static/ui.js. #}
+  <td class="px-3 py-2 truncate" title="{{ _tip|trim }}"><span class="font-mono text-xs text-slate-500">#{{ a.id }}</span> {{ a.attack_type|default('Alert') }}</td>
   <td class="px-3 py-2 truncate">
     {% if a.resolved_by == 'system' %}<span class="text-slate-500 text-xs">Auto-closed</span>
     {% elif a.resolved_at %}<span class="text-purple-700 text-xs">Resolved</span>

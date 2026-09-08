@@ -258,6 +258,20 @@ body { margin: 0; line-height: 1.5; -webkit-font-smoothing: antialiased; }
    severity bar on each row stay anchored as new SSE alerts prepend. */
 .table-scroll  { max-height: 420px; overflow-y: auto; }
 
+/* Round K — IT dashboard only. The flat 420px cap showed 8 of 50 rows on a
+   1080p monitor while the page scrolled anyway; this ties the table to the
+   viewport instead. 320px subtracts the header, KPI strip, filter bar, pager
+   and footer; min-height keeps a usable table on a short laptop screen even
+   when the arithmetic goes negative. flex-1 + min-height:0 let the wrapper
+   fill the alerts card when the sidebar column is the taller of the two
+   (the grid row is items-stretch). The manager feed keeps plain
+   .table-scroll. */
+.table-scroll--tall {
+  max-height: calc(100vh - 320px);
+  min-height: 320px;
+  flex: 1 1 auto;
+}
+
 /* Caps the agents side panel (used by dashboard_it.html in Round C). */
 .agents-scroll { max-height: 300px; overflow-y: auto; }
 

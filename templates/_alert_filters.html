@@ -11,8 +11,17 @@
 
    Persistence: dashboards._alert_filters_from_request() reads `applied=1` as an
    explicit submit and remembers the choice in the session, so the toggle no
-   longer reverts when you open an alert or hit another page. #}
-<form method="get" action="" id="alert-filters">
+   longer reverts when you open an alert or hit another page.
+
+   Round K: optional `embedded` flag. The IT dashboard includes this partial as
+   the first child of the alerts card, so there the bar drops its own card
+   chrome (rounded corners, shadow, bottom margin) and its sticky positioning —
+   it sits above a table that scrolls inside its own wrapper, so it never
+   leaves the viewport anyway. Manager dashboard includes it without the flag
+   and keeps the free-standing sticky card. Only the class string differs; the
+   controls and their ids are identical in both modes. #}
+{% set embedded = embedded|default(false) %}
+<form method="get" action="" id="alert-filters"{% if embedded %} class="flex-shrink-0"{% endif %}>
   {# Changing any filter goes back to page 1 — page 7 of an unfiltered list
      is rarely page 7 of a filtered one. #}
   <input type="hidden" name="page" value="1">
@@ -20,8 +29,7 @@
      server persists the choice — including "hide_low unchecked", which sends
      no field of its own. #}
   <input type="hidden" name="applied" value="1">
-<section class="bg-white rounded-xl shadow-card border border-surface-200 p-4 mb-4
-                sticky top-0 z-20
+<section class="{% if embedded %}border-b border-surface-200 p-3{% else %}bg-white rounded-xl shadow-card border border-surface-200 p-4 mb-4 sticky top-0 z-20{% endif %}
                 flex flex-col md:flex-row md:items-center gap-3 justify-between min-w-0">
   <div class="flex flex-wrap items-center gap-3">
     <div class="flex items-center gap-2">
