@@ -301,6 +301,36 @@ IT_RECOMMENDER_ENABLED = os.environ.get(
     "IT_RECOMMENDER_ENABLED", ""
 ).lower() in ("1", "true", "yes")
 
+# ── IT recommendation: burst reuse + backfill ────────────────────────────────
+# The recommendation prompt embeds the whole raw alert JSON — timestamps,
+# full_log, file paths — so its sha256 cache key is unique per alert and the
+# ai_cache NEVER hits on a repeat. Ten identical rule-100020 alerts therefore ran
+# ten full provider chains, serialised through a semaphore of 1; alert four
+# onward waited 30s, logged "recommender busy", and was left with a permanently
+# NULL it_recommendation because nothing retried.
+#
+# Reuse closes that: before spending a call, take the newest recommendation from
+# the same rule on the same device inside this window. 0 disables reuse and
+# restores the exact previous behaviour — the kill switch for this feature.
+IT_REC_REUSE_WINDOW_MIN = int(os.environ.get("IT_REC_REUSE_WINDOW_MIN", "15"))
+
+# Backfill sweep for alerts that ended up blank anyway (a burst that outran the
+# window, a provider outage, a worker restart mid-generation). Runs in
+# insightshield-worker, which owns the scheduler, so it never competes with a
+# live webhook for the gunicorn workers' semaphore. 0 disables the job.
+IT_REC_BACKFILL_MIN = int(os.environ.get("IT_REC_BACKFILL_MIN", "10"))
+# Alerts per sweep. Small on purpose: the point is to drain a backlog slowly
+# inside the free tier, not to replay a burst at full speed.
+IT_REC_BACKFILL_BATCH = int(os.environ.get("IT_REC_BACKFILL_BATCH", "3"))
+
+# Word ceiling for IT investigation steps, separate from MAX_WORDS.
+# IT_SYSTEM_PROMPT asks for 100 words; models land at 103-104 often enough that
+# the shared 100-word cap was rejecting BOTH providers and storing
+# AI_CHAIN_EXHAUSTED after two real API calls. 120 is the tolerance band, not a
+# new target — the prompt still says 100. MAX_WORDS stays 100 for the manager
+# translation, which is deliberately short.
+IT_REC_MAX_WORDS = int(os.environ.get("IT_REC_MAX_WORDS", "120"))
+
 
 def ai_enabled_for(severity: str) -> bool:
     """True if this severity is eligible for a live AI call.

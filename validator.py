@@ -62,7 +62,7 @@ def validate_it_recommendation(text: str) -> bool:
     1. "INVESTIGATE:" section header present
     2. "CHECK:" section header present
     3. "MITIGATE:" section header present
-    4. Word count <= MAX_WORDS (100)
+    4. Word count <= IT_REC_MAX_WORDS (120)
 
     NO forbidden-word check — IT staff need TCP/RDP/SMB/etc. by definition.
     """
@@ -75,11 +75,15 @@ def validate_it_recommendation(text: str) -> bool:
             logger.warning("Validation REJECTED (it_rec): missing '%s' section", tag)
             return False
 
+    # IT_REC_MAX_WORDS, not the shared MAX_WORDS. The prompt asks for 100 words
+    # and models routinely land at 103-104; against a hard 100 that rejected
+    # Groq AND Gemini on the same alert, burned two live calls, and stored
+    # AI_CHAIN_EXHAUSTED. The manager translation keeps the stricter 100.
     word_count = len(text.split())
-    if word_count > config.MAX_WORDS:
+    if word_count > config.IT_REC_MAX_WORDS:
         logger.warning(
             "Validation REJECTED (it_rec): word count %d exceeds limit %d",
-            word_count, config.MAX_WORDS,
+            word_count, config.IT_REC_MAX_WORDS,
         )
         return False
 
