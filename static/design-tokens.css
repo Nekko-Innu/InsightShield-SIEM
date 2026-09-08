@@ -272,6 +272,86 @@ body { margin: 0; line-height: 1.5; -webkit-font-smoothing: antialiased; }
   flex: 1 1 auto;
 }
 
+/* ---------- Round K follow-up — IT dashboard viewport fit ----------
+   Three complaints, one cause. The grid row is items-stretch, so the alerts
+   card grew to the sidebar's height, but .table-scroll--tall stopped at its
+   max-height — the difference landed as dead space under the pager. And with
+   the page still taller than the window, the footer needed a scroll to reach.
+
+   So at desktop size the dashboard takes the viewport: body becomes a flex
+   column of exactly 100vh, main owns the leftover height, the table fills
+   whatever the filter bar and pager leave, and the footer sits on the bottom
+   edge without a scrollbar. No dead space, because nothing is capped any more —
+   the table absorbs the slack by construction.
+
+   Gated on BOTH dimensions on purpose:
+     min-width 1280px  — the grid collapses to one column below Tailwind's xl,
+                         and a stacked table + sidebar inside overflow:hidden
+                         would put the audit log somewhere unreachable.
+     min-height 700px  — on a short laptop the arithmetic leaves ~4 rows, which
+                         is worse than scrolling.
+   Outside those bounds the page scrolls normally and .table-scroll--tall's
+   max-height governs, exactly as before.
+
+   Scoped by body.viewport-fit (set by dashboard_it.html via the body_class
+   block), so login, settings, alert detail and the printable report are
+   untouched. */
+.dash-grid { align-items: start; }
+
+@media (min-width: 1280px) and (min-height: 700px) {
+  body.viewport-fit {
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  body.viewport-fit > main {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding-bottom: 0.75rem;
+  }
+  body.viewport-fit > header {
+    flex-shrink: 0;
+    width: 100%;
+  }
+  /* width:100% is load-bearing. The footer is `mx-auto max-w-… flex
+     justify-between`; as a flex item in the column it shrink-to-fits instead of
+     filling, which collapsed justify-between and printed
+     "Build 0.5.1Insight Shield v1.5.1 …" as one run-on line. */
+  body.viewport-fit > footer {
+    flex-shrink: 0;
+    width: 100%;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+  /* grid-template-rows is the load-bearing line, not align-items. A grid row
+     defaults to `auto` — it sizes to its content and happily overflows a
+     container with a definite height, which put the sidebar 16px past main's
+     bottom edge (clipped, since main is overflow:hidden). minmax(0, 1fr) makes
+     the row exactly the container's height instead. min-height:0 on the two
+     children then lets their inner scroll areas shrink, because grid items
+     default to min-height:auto and refuse to go below content size. */
+  body.viewport-fit .dash-grid {
+    align-items: stretch;
+    grid-template-rows: minmax(0, 1fr);
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  body.viewport-fit .dash-grid > * {
+    min-height: 0;
+  }
+  /* The cap is what created the gap; inside the locked layout the flex parent
+     already bounds this wrapper, so drop it and let the table take the slack. */
+  body.viewport-fit .table-scroll--tall {
+    max-height: none;
+    min-height: 0;
+  }
+}
+
 /* Caps the agents side panel (used by dashboard_it.html in Round C). */
 .agents-scroll { max-height: 300px; overflow-y: auto; }
 

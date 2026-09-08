@@ -65,7 +65,10 @@
   </script>
   {% block head_extra %}{% endblock %}
 </head>
-<body class="min-h-screen bg-surface-50 text-slate-900 font-sans"
+{# body_class: a page that needs to own the whole viewport (currently only the
+   IT dashboard, which sets `viewport-fit`) opts in here. Empty everywhere else,
+   so every other page keeps normal document flow and page scroll. #}
+<body class="min-h-screen bg-surface-50 text-slate-900 font-sans {% block body_class %}{% endblock %}"
       data-authed="{{ 1 if current_user and current_user.is_authenticated else 0 }}">
   <a href="#main" class="skip-link">Skip to content</a>
 

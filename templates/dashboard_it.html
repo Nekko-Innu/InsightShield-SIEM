@@ -6,6 +6,10 @@
    horizontal bar chart rendered in static/ui.js. No CDN needed. #}
 {% endblock %}
 
+{# Desktop-only viewport fit — see the body.viewport-fit block in
+   design-tokens.css for what it does and why it is gated on 1280x700. #}
+{% block body_class %}viewport-fit{% endblock %}
+
 {% block content %}
 <h1 class="sr-only">IT Admin Console</h1>
 
@@ -17,7 +21,7 @@
    tabular-nums keeps digit columns from jiggling as counts change.
    Round J: SMS credits tile removed (SMS channel retired) — fixed
    4-column layout. #}
-<section class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+<section class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 flex-shrink-0">
   {% set kpis = [
     ('Open alerts',   kpi.open|default(0),         'slate', None),
     ('24h MTTA',      kpi.mtta|default('—'),       'slate', None),
@@ -33,11 +37,10 @@
   {% endfor %}
 </section>
 
-{# Round K: items-start -> items-stretch. The left column is now viewport-tall
-   (.table-scroll--tall), so top-aligning left an unbalanced band of empty page
-   under the shorter sidebar. Stretch makes both tracks share the row height and
-   lets the Agents card grow into the slack. #}
-<div class="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-4 items-stretch">
+{# Alignment lives in .dash-grid (design-tokens.css): start by default, stretch
+   only inside the viewport-fit media query, where the table can actually absorb
+   the extra height instead of parking it under the pager. #}
+<div class="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-4 dash-grid">
   <!-- Main table -->
   {# Round D §16: defensive min-w-0 on the left grid child. Currently
      latent because the inner `<div class="overflow-x-auto table-scroll">`
@@ -208,11 +211,11 @@
     </section>
     <section class="bg-white rounded-xl shadow-card border border-surface-200 p-4 flex-shrink-0">
       <h2 class="text-sm font-medium text-slate-500 mb-2">Audit log</h2>
-      {# UI rework Round-C tweak: replaced inline max-h-72 overflow-auto
-         with .agents-scroll utility for consistency with the Agents card
-         above; same scroll behaviour, single source of truth in
-         design-tokens.css. #}
-      <ul class="space-y-2 text-sm agents-scroll">
+      {# Round K follow-up: 300px of .agents-scroll made this the tallest thing
+         in the sidebar for a list nobody reads top-to-bottom — the last few
+         actions are the point. Capped at 9rem with its own scrollbar, which
+         hands the difference to the Agents card above. #}
+      <ul class="space-y-2 text-sm max-h-36 overflow-y-auto">
         {% for e in audit_log|default([]) %}
         <li class="flex gap-2">
           <time datetime="{{ e.ts }}" data-humanize title="{{ e.ts | forensic_ts }}" class="text-xs text-slate-500 shrink-0 w-16">{{ e.ts }}</time>
