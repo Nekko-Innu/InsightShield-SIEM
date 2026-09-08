@@ -61,6 +61,24 @@ fi
 # is check 7a below — it needs $DB, which is defined there.
 
 # 2. gunicorn bound to loopback:5000
+# Wait for the bind first. insightshield.service is Type=simple, so systemd
+# calls the unit active the moment gunicorn's master forks — one to two seconds
+# before three workers (no preload_app, each one running create_app() and
+# db.init_db()) actually listen on 5000. update.sh restarts the service and
+# calls this script immediately, so without this loop every single update
+# reported "not bound" + two 502s for an app that was merely still booting,
+# and the operator went looking for a crash that never happened.
+# A genuinely dead app still fails: this gives up after 10s and falls through
+# to the same checks.
+# command -v rather than need_cmd(): a missing curl already warns once below,
+# and twice for the same fact reads like two problems.
+if command -v curl >/dev/null 2>&1; then
+  for _ in $(seq 1 20); do
+    curl -fsS http://127.0.0.1:5000/health >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+fi
+
 if need_cmd ss "the listening-socket checks"; then
   if ss -tlnp 2>/dev/null | grep -q '127.0.0.1:5000'; then
     pass "gunicorn: bound to 127.0.0.1:5000"
