@@ -27,6 +27,11 @@ logger = logging.getLogger("insightshield.wazuh_receiver")
 # them (default 1) is free — recommendations are off any request's critical path.
 _ITREC_SEMAPHORE = threading.BoundedSemaphore(config.IT_RECOMMENDER_MAX_CONCURRENCY)
 
+# One translation retry at a time, per worker. Acquired non-blocking: a burst
+# shares one prompt, so the first retry's positive cache entry serves every
+# later alert inline. Queuing the rest would buy the same answer repeatedly.
+_XLATE_SEMAPHORE = threading.BoundedSemaphore(1)
+
 # ── Severity Level Mapping ───────────────────────────────────────────────────
 # Maps Wazuh integer rule_level to Insight Shield severity string.
 # Uses .get() with default — never direct dict access.
@@ -375,6 +380,28 @@ def process_alert(payload: dict) -> int:
             alert_id, ai_ok, config.IT_RECOMMENDER_ENABLED,
         )
 
+    # Step 4b: Retry a translation that fell back to static. The inline attempt
+    # above runs inside the webhook on AI_INGEST_BUDGET_S (5s), which the Wazuh
+    # integrator's 10s timeout dictates. In practice provider one consumes that
+    # whole window — a slow model read-times-out at 4.99s — and the chain logs
+    # "budget exhausted before <fallback> (-0.0s left)". So the configured
+    # fallback provider had never actually run on ingest; the chain was
+    # single-provider with extra steps.
+    #
+    # This thread gives it the real budget off the request path, and passes
+    # ignore_negative_cache because the inline failure just poisoned this very
+    # key for 300s. On success it rewrites the row AND leaves a positive cache
+    # entry, so the rest of a burst hits cache inline instead of each paying 5s
+    # to fail. That is the "only use the fallback once the first AI is
+    # exhausted" shape, without making the webhook wait for it.
+    if ai_ok and provider_used == "static" and config.TRANSLATION_RETRY_ENABLED:
+        threading.Thread(
+            target=_upgrade_translation,
+            args=(alert_id, rule_id, description, device_name),
+            daemon=True,
+            name=f"xlate-{alert_id}",
+        ).start()
+
     # Step 5: Route to notification channels
     try:
         alert_data = db.get_alert(alert_id)
@@ -444,6 +471,50 @@ def _kick_it_recommendation(
         )
     finally:
         _ITREC_SEMAPHORE.release()
+
+
+def _upgrade_translation(
+    alert_id: int,
+    rule_id: str,
+    description: str,
+    device_name: str,
+) -> None:
+    """
+    Re-run the manager translation off the request path, with the full chain
+    budget so the fallback provider gets a turn it never gets inline.
+
+    Non-blocking acquire on purpose: if another thread is already retrying, this
+    alert does not queue behind it. During a burst every alert shares one prompt,
+    so the winner's positive cache entry serves the rest inline — waiting in line
+    to compute the same answer would only spend more quota.
+
+    Never raises; the webhook returned 200 long before this runs.
+    """
+    if not _XLATE_SEMAPHORE.acquire(blocking=False):
+        logger.debug("translation retry skipped (alert_id=%s): one already running",
+                     alert_id)
+        return
+    try:
+        text, provider, reasoning = groq_translator.translate(
+            rule_id, description, device_name,
+            use_ai=True,
+            budget_s=config.AI_CHAIN_BUDGET_S,
+            ignore_negative_cache=True,
+        )
+        if provider == "static":
+            # Still failing with 25s and every provider — a real outage, not a
+            # slow first call. The row already holds the static template, so
+            # there is nothing to write; the inline negative cache keeps the
+            # rest of the burst cheap.
+            logger.warning("translation retry still static (alert_id=%s)", alert_id)
+            return
+        db.update_alert_translation(alert_id, text, provider, reasoning)
+        logger.info("translation retry succeeded (alert_id=%s provider=%s)",
+                    alert_id, provider)
+    except Exception as e:
+        logger.warning("translation retry failed (alert_id=%s): %s", alert_id, e)
+    finally:
+        _XLATE_SEMAPHORE.release()
 
 
 def _reuse_sibling_recommendation(

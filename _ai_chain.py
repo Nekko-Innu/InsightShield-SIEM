@@ -78,6 +78,7 @@ def run_chain(
     cache_set: Optional[Callable[[str, str], None]] = None,
     cache_key: Optional[str] = None,
     budget_s: float = None,
+    ignore_negative_cache: bool = False,
 ) -> tuple[str, str, str]:
     """
     Run prompt through cache → each active provider in order → AI_CHAIN_EXHAUSTED.
@@ -111,6 +112,18 @@ def run_chain(
 
     if cache_get and cache_key:
         cached = cache_get(cache_key)
+        if cached == AI_CHAIN_EXHAUSTED and ignore_negative_cache:
+            # The retry path (wazuh_receiver._upgrade_translation) deliberately
+            # walks past its own poison. The inline attempt runs on a 5s webhook
+            # budget and negative-caches whatever it could not finish in time;
+            # without this, the background retry — the whole point of which is to
+            # give the chain 25s and a real shot at the fallback provider — would
+            # read that entry and give up instantly.
+            reasoning.append(
+                f"Negative cache entry for key={cache_key} ignored (retry path)."
+            )
+            logger.info("ai_chain: ignoring negative cache for key=%s", cache_key)
+            cached = None
         if cached == AI_CHAIN_EXHAUSTED:
             # Negative cache hit. Without this branch the sentinel would be
             # returned as the answer text, and a manager would read

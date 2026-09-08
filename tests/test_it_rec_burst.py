@@ -121,6 +121,85 @@ def test_backfill_query_finds_only_open_blank_high_criticals():
     assert len(found) == 2
 
 
+def test_retry_upgrades_a_static_row_when_the_fallback_succeeds(monkeypatch):
+    """The inline 5s attempt fell back to static; the 25s retry gets a real answer."""
+    import groq_translator
+
+    alert_id = _alert()
+    db._get_conn().execute(
+        "UPDATE alerts SET plain_text = ?, provider_used = 'static' WHERE id = ?",
+        ("STATIC TEMPLATE", alert_id),
+    )
+    db._get_conn().commit()
+
+    seen = {}
+
+    def _fake_translate(rule_id, description, device_name, use_ai=True,
+                        budget_s=None, ignore_negative_cache=False):
+        seen["budget_s"] = budget_s
+        seen["ignore_negative_cache"] = ignore_negative_cache
+        return ("WHAT HAPPENED: real answer. WHAT TO DO: act.", "Gemini", "reasoning")
+
+    monkeypatch.setattr(groq_translator, "translate", _fake_translate)
+    wazuh_receiver._upgrade_translation(alert_id, "100020", "desc", "wazuh-system")
+
+    row = db.get_alert(alert_id)
+    assert row["provider_used"] == "Gemini"
+    assert "real answer" in row["plain_text"]
+    # The whole point: full budget, and walk past the poison the inline attempt
+    # just wrote for this key.
+    assert seen["budget_s"] == config.AI_CHAIN_BUDGET_S
+    assert seen["ignore_negative_cache"] is True
+
+
+def test_retry_leaves_the_row_alone_when_it_also_fails(monkeypatch):
+    import groq_translator
+
+    alert_id = _alert()
+    db._get_conn().execute(
+        "UPDATE alerts SET plain_text = ?, provider_used = 'static' WHERE id = ?",
+        ("STATIC TEMPLATE", alert_id),
+    )
+    db._get_conn().commit()
+
+    monkeypatch.setattr(
+        groq_translator, "translate",
+        lambda *a, **kw: ("STATIC TEMPLATE", "static", "still down"),
+    )
+    wazuh_receiver._upgrade_translation(alert_id, "100020", "desc", "wazuh-system")
+
+    row = db.get_alert(alert_id)
+    assert row["provider_used"] == "static"
+    assert row["plain_text"] == "STATIC TEMPLATE"
+
+
+def test_ignore_negative_cache_walks_past_the_poison():
+    """A negative entry stops the inline path and must not stop the retry."""
+    import _ai_chain
+
+    key = "test-negative-key"
+    store = {key: config.AI_CHAIN_EXHAUSTED}
+
+    def _get(k):
+        return store.get(k)
+
+    text, provider, _ = _ai_chain.run_chain(
+        prompt="p", providers=[], validator_fn=lambda t: True,
+        cache_get=_get, cache_key=key,
+    )
+    assert provider == config.AI_CHAIN_EXHAUSTED, "inline path must honour the poison"
+
+    # Same entry, retry path: it gets past the cache and fails for the honest
+    # reason instead (no providers configured), which is what lets a real chain
+    # run in production.
+    _, _, reasoning = _ai_chain.run_chain(
+        prompt="p", providers=[], validator_fn=lambda t: True,
+        cache_get=_get, cache_key=key, ignore_negative_cache=True,
+    )
+    assert "ignored (retry path)" in reasoning
+    assert "No active providers" in reasoning
+
+
 def test_manager_word_cap_is_untouched_by_the_it_rec_bump():
     """The IT cap moved to 120; the manager translation stays at 100."""
     import validator

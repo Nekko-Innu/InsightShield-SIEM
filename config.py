@@ -323,6 +323,18 @@ IT_REC_BACKFILL_MIN = int(os.environ.get("IT_REC_BACKFILL_MIN", "10"))
 # inside the free tier, not to replay a burst at full speed.
 IT_REC_BACKFILL_BATCH = int(os.environ.get("IT_REC_BACKFILL_BATCH", "3"))
 
+# Retry a manager translation that fell back to static, in a background thread
+# with the full AI_CHAIN_BUDGET_S instead of the webhook's 5s slice.
+#
+# The 5s slice is set by the Wazuh integrator's 10s timeout, and one slow
+# provider eats all of it — the chain then logs "budget exhausted before
+# <fallback> (-0.0s left)", which means the configured fallback provider has
+# never once run on ingest. The retry is where the chain actually becomes a
+# chain. TRANSLATION_RETRY=0 disables it and restores the previous behaviour.
+TRANSLATION_RETRY_ENABLED = os.environ.get(
+    "TRANSLATION_RETRY", "1"
+).lower() in ("1", "true", "yes")
+
 # Word ceiling for IT investigation steps, separate from MAX_WORDS.
 # IT_SYSTEM_PROMPT asks for 100 words; models land at 103-104 often enough that
 # the shared 100-word cap was rejecting BOTH providers and storing

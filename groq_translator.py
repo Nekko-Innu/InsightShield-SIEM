@@ -124,6 +124,8 @@ def translate(
     description: str,
     device_name: str,
     use_ai: bool = True,
+    budget_s: float | None = None,
+    ignore_negative_cache: bool = False,
 ) -> tuple[str, str, str]:
     """
     Translate a Wazuh alert into plain English for the manager dashboard.
@@ -176,7 +178,14 @@ def translate(
         # notification routing still to come in the same request. Persisting the
         # alert is the job; the plain-English rewrite is decoration with a
         # guaranteed static fallback, so it gets the small end of that budget.
-        budget_s=config.AI_INGEST_BUDGET_S,
+        #
+        # 5s is also why the SECOND provider never ran here: provider one
+        # consumes the window and the chain logs "budget exhausted before
+        # Gemini (-0.0s left)" every time. The fallback only becomes real on the
+        # retry path, which passes the full AI_CHAIN_BUDGET_S — see
+        # wazuh_receiver._upgrade_translation.
+        budget_s=budget_s or config.AI_INGEST_BUDGET_S,
+        ignore_negative_cache=ignore_negative_cache,
     )
     if provider == _ai_chain.AI_CHAIN_EXHAUSTED:
         text = _get_static_template(rule_id, device_name)

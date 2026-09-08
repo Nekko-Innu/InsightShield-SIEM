@@ -872,6 +872,42 @@ def update_it_recommendation(
         return False
 
 
+def update_alert_translation(
+    alert_id: int,
+    plain_text: str,
+    provider_used: str,
+    ai_reasoning: str = "",
+) -> bool:
+    """
+    Replace an alert's manager translation after ingest already stored one.
+
+    Written by wazuh_receiver._upgrade_translation when the inline 5s attempt
+    fell back to the static template and the background retry — with the full
+    chain budget, so the fallback provider actually gets a turn — produced a
+    real translation. Never raises; returns False on a lookup miss.
+
+    Only upgrades: the caller checks that the retry succeeded before calling, so
+    a static row is never overwritten with another static row.
+    """
+    conn = _get_conn()
+    try:
+        cursor = conn.execute(
+            "UPDATE alerts SET plain_text = ?, provider_used = ?, ai_reasoning = ? "
+            "WHERE id = ?",
+            (plain_text, provider_used, ai_reasoning, alert_id),
+        )
+        conn.commit()
+        ok = cursor.rowcount > 0
+        if ok:
+            logger.info(
+                "Translation upgraded: alert_id=%s provider=%s", alert_id, provider_used,
+            )
+        return ok
+    except Exception as e:
+        logger.warning("update_alert_translation failed (alert_id=%s): %s", alert_id, e)
+        return False
+
+
 def get_recent_it_recommendation(
     rule_id: str,
     device_name: str,
