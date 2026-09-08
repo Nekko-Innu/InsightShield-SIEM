@@ -208,3 +208,74 @@ def test_manager_word_cap_is_untouched_by_the_it_rec_bump():
     assert config.MAX_WORDS == 100
     long_manager = " ".join(["word"] * 101)
     assert validator.validate_manager_translation(long_manager) is False
+
+
+# ── Timestamp normalisation ──────────────────────────────────────────────────
+# alerts.timestamp is TEXT and every window compares it as TEXT, so the column
+# cannot hold two timezones. It did: Wazuh's integrator passes its own UTC stamp
+# through untouched while the receiver stamped PHT when the payload had none.
+
+def test_normalize_ts_puts_every_producer_in_one_timezone():
+    wazuh_utc = "2026-09-08T06:45:42.483000+00:00"   # 14:45:42 PHT — the NEWER one
+    ours_pht = "2026-09-08T14:15:37.000287+08:00"    # 14:15:37 PHT — the OLDER one
+
+    a = db.normalize_ts(wazuh_utc)
+    b = db.normalize_ts(ours_pht)
+    assert a.endswith("+08:00") and b.endswith("+08:00")
+    # The whole point: text comparison now agrees with chronology. Before this,
+    # "14:15" > "06:45" as text put the older row on top of the newer one.
+    assert a > b
+    assert wazuh_utc < ours_pht, "the raw strings really did sort backwards"
+
+
+def test_normalize_ts_handles_z_naive_and_garbage():
+    assert db.normalize_ts("2026-09-08T06:45:42.483Z").startswith("2026-09-08T14:45:42")
+    # Naive input is read as local (PHT) — what a hand-rolled curl means.
+    assert db.normalize_ts("2026-09-08T14:15:37") == "2026-09-08T14:15:37+08:00"
+    # An alert source does not get to decide where its row sorts.
+    assert db.normalize_ts("garbage").endswith("+08:00")
+    assert db.normalize_ts(None).endswith("+08:00")
+
+
+def test_store_alert_normalizes_on_the_way_in():
+    alert_id = db.store_alert({
+        "timestamp": "2026-09-08T06:45:42.483000+00:00", "rule_id": "100020",
+        "attack_type": "[T/D] Ransomware", "severity": "CRITICAL",
+        "device_name": "wazuh-system", "raw_alert": "{}", "plain_text": "x",
+        "ai_reasoning": "", "provider_used": "cache", "fk_grade": 6.0,
+        "attack_trail": None,
+    })
+    stored = db.get_alert(alert_id)["timestamp"]
+    assert stored == "2026-09-08T14:45:42.483000+08:00"
+
+
+def test_recent_window_no_longer_skips_wazuh_stamped_rows():
+    """The invisible half of the bug: UTC rows fell out of every PHT window."""
+    now_utc = (datetime.now(tz=config.PHT) - timedelta(minutes=2)).astimezone(
+        __import__("datetime").timezone.utc
+    ).isoformat()
+    source = db.store_alert({
+        "timestamp": now_utc, "rule_id": "100020", "attack_type": "[T/D] Ransomware",
+        "severity": "CRITICAL", "device_name": "wazuh-system", "raw_alert": "{}",
+        "plain_text": "x", "ai_reasoning": "", "provider_used": "cache",
+        "fk_grade": 6.0, "attack_trail": None,
+    })
+    db.update_it_recommendation(source, STEPS)
+
+    found = db.get_recent_it_recommendation("100020", "wazuh-system", 15)
+    assert found is not None, "a UTC-stamped alert must be visible to a PHT window"
+    assert found[0] == source
+
+
+def test_alert_list_orders_by_id_not_by_payload_timestamp():
+    """A payload cannot push its row to the top by claiming a future time."""
+    old = db.store_alert({
+        "timestamp": "2030-01-01T00:00:00+08:00",  # a lie from the alert source
+        "rule_id": "100020", "attack_type": "[T/D] Ransomware", "severity": "CRITICAL",
+        "device_name": "wazuh-system", "raw_alert": "{}", "plain_text": "x",
+        "ai_reasoning": "", "provider_used": "cache", "fk_grade": 6.0,
+        "attack_trail": None,
+    })
+    newer = _alert()
+    ids = [a["id"] for a in db.search_alerts(limit=10)]
+    assert ids.index(newer) < ids.index(old)

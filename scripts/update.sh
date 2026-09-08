@@ -93,10 +93,14 @@ fi
 #                       (needs GROQ_API_KEY in .env to add Groq).
 #   backfill_autoclose — close pre-existing MEDIUM/LOW/INFO alerts that predate
 #                        the auto-close policy so they stop showing as "Open".
+#   normalize_timestamps — rewrite alerts.timestamp to one timezone. The column
+#                        held Wazuh's UTC and our PHT side by side, which sorted
+#                        the table wrong and dropped rows out of every
+#                        recent-window query.
 # Run as the service user with cwd=$APP so .env loads and the DB path resolves
 # the same way the app does.
 if [ -x "$VENV/bin/python" ]; then
-  for m in repair_providers backfill_autoclose; do
+  for m in repair_providers backfill_autoclose normalize_timestamps; do
     if runuser -u "$SVC_USER" -- sh -c "cd '$APP' && '$VENV/bin/python' scripts/$m.py" >/dev/null 2>&1; then
       pass "migrate: $m applied"
     else

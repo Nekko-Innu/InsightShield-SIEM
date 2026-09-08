@@ -292,6 +292,51 @@ def init_db() -> None:
 
 # ── Alerts CRUD ──────────────────────────────────────────────────────────────
 
+def normalize_ts(value, *, default_tz=None) -> str:
+    """
+    Coerce any incoming timestamp to a PHT ISO-8601 string.
+
+    `alerts.timestamp` is TEXT, and every window in this module compares it as
+    TEXT against a `datetime.now(tz=config.PHT).isoformat()` cutoff. That is only
+    correct while every row carries the SAME offset — and it did not: Wazuh
+    passes its own UTC stamp through the integrator untouched, while
+    wazuh_receiver stamps PHT when the payload has none. One table, two
+    timezones, e.g.
+
+        12542  2026-09-08T06:45:42.483000+00:00   (Wazuh, UTC)
+        12538  2026-09-08T14:15:37.000287+08:00   (ours, PHT)
+
+    Sorted as text, the PHT rows float above everything newer, which is the
+    visible bug. The invisible one is worse: a UTC row reads as "06:45" against
+    a "14:30" cutoff, so it looks eight hours older than it is and drops out of
+    every recent-window query — the severity chart's today, the report's date
+    range, the IT-recommendation reuse window and the backfill sweep all
+    silently skipped Wazuh-stamped alerts.
+
+    Normalising on the way in makes text order chronological again and keeps
+    every existing cutoff comparison honest, with no query rewrites. Naive input
+    (no offset) is assumed to be `default_tz`, PHT by default, because that is
+    what a local script or a hand-rolled curl means by a bare timestamp.
+    Unparseable input becomes now(): an alert source does not get to decide
+    where its row sorts.
+    """
+    tz = default_tz or config.PHT
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        try:
+            # fromisoformat handles the offset forms both producers emit; the
+            # replace covers a trailing Z, which it rejects before 3.11.
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            logger.warning("Unparseable alert timestamp %r — stamping now()", text[:64])
+            return datetime.now(tz=config.PHT).isoformat()
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=tz)
+    return parsed.astimezone(config.PHT).isoformat()
+
+
 def store_alert(alert_dict: dict) -> int:
     """
     Insert a new alert row. Returns the auto-incremented ID.
@@ -317,7 +362,9 @@ def store_alert(alert_dict: dict) -> int:
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            alert_dict["timestamp"],
+            # Every row lands in one timezone; see normalize_ts for why the
+            # column cannot hold a mix.
+            normalize_ts(alert_dict["timestamp"]),
             alert_dict["rule_id"],
             alert_dict["attack_type"],
             alert_dict["severity"],
@@ -436,8 +483,16 @@ def search_alerts(status: str | None = None,
     clauses, params = _alert_filter_clauses(status, severity, q, hide_low)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     conn = _get_conn()
+    # Ordered by id, not timestamp. Two reasons, both learned the hard way:
+    # timestamp is TEXT supplied by the alert source (see normalize_ts — it held
+    # two timezones and sorted rows into the wrong order), and the live feed
+    # prepends by id watermark, so a timestamp sort made SSE arrivals and a page
+    # reload disagree about where a row belongs. id is monotonic, ours, and is
+    # insertion order — which is what "newest first" means to the operator
+    # watching alerts arrive. The Time column still displays the payload's own
+    # timestamp.
     rows = conn.execute(
-        f"SELECT * FROM alerts{where} ORDER BY timestamp DESC, id DESC "
+        f"SELECT * FROM alerts{where} ORDER BY id DESC "
         f"LIMIT ? OFFSET ?",
         tuple(params) + (limit, offset),
     ).fetchall()
