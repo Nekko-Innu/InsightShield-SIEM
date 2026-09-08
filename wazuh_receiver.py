@@ -7,6 +7,7 @@
 
 import json
 import logging
+import re
 import threading
 from datetime import datetime, timedelta
 
@@ -409,10 +410,24 @@ def _kick_it_recommendation(
     # about. A start line with no matching "complete" or "failed" is now the
     # signal that the process went away mid-generation.
     logger.info("IT recommendation start (alert_id=%s)", alert_id)
+
+    # Burst reuse, BEFORE the semaphore. The ai_cache cannot help here: the
+    # recommendation prompt embeds the whole raw alert, so every repeat hashes
+    # to a new key and runs a full chain. Ten identical criticals therefore
+    # queued on a semaphore of 1, and everything past the third timed out into
+    # "recommender busy" with a permanently NULL recommendation.
+    #
+    # Same rule, same device, minutes apart is the same investigation, so copy
+    # the sibling's steps instead of buying them again. Ahead of the acquire so
+    # a burst never occupies the slot at all — which is what turned a 30s wait
+    # into a blank card.
+    if _reuse_sibling_recommendation(alert_id, rule_id, device_name):
+        return
+
     # Serialise the actual chain call so a burst of criticals doesn't launch
     # many concurrent provider requests at once (see _ITREC_SEMAPHORE). Bounded
     # wait: if the slot doesn't free within the window, skip rather than pile up
-    # threads — the cache/negative-cache means the next identical alert is cheap.
+    # threads — scheduler._it_rec_backfill picks up whatever was skipped.
     acquired = _ITREC_SEMAPHORE.acquire(timeout=config.AI_CHAIN_BUDGET_S + 5.0)
     if not acquired:
         logger.warning("IT recommendation skipped (alert_id=%s): recommender busy", alert_id)
@@ -429,6 +444,59 @@ def _kick_it_recommendation(
         )
     finally:
         _ITREC_SEMAPHORE.release()
+
+
+def _reuse_sibling_recommendation(
+    alert_id: int,
+    rule_id: str,
+    device_name: str,
+) -> bool:
+    """
+    Copy a recent recommendation from the same rule + device onto this alert.
+
+    Returns True when one was found and stored, False to fall through to a real
+    AI call. Shared by the ingest worker thread and scheduler._it_rec_backfill,
+    so both spend quota under the same rule.
+
+    The copied text was deobfuscated through the SOURCE alert's map, so it names
+    that alert's identifiers. Same rule on the same machine makes that
+    near-identical; a different attacker IP is the case where it would not be,
+    which is why the stored text carries a provenance line naming the source
+    alert instead of passing itself off as freshly written. (alerts.provider_used
+    holds the manager translation's provider and is not ours to overwrite; the
+    provenance has to live in the text.)
+    """
+    try:
+        sibling = db.get_recent_it_recommendation(
+            rule_id, device_name, config.IT_REC_REUSE_WINDOW_MIN
+        )
+    except Exception as e:
+        logger.warning("sibling lookup failed (alert_id=%s): %s", alert_id, e)
+        return False
+    if not sibling:
+        return False
+
+    source_id, text = sibling
+    # Idempotent under the backfill sweep: strip any provenance line the source
+    # itself carried, so a chain of reuses never stacks headers.
+    body = _REUSE_HEADER_RE.sub("", text, count=1).lstrip()
+    stamped = (
+        f"(Reused from alert #{source_id} — same rule on the same device within "
+        f"{config.IT_REC_REUSE_WINDOW_MIN} minutes.)\n\n{body}"
+    )
+    db.update_it_recommendation(
+        alert_id, stamped, provider_used=f"reused:#{source_id}"
+    )
+    logger.info(
+        "IT recommendation reused (alert_id=%s source=%s rule_id=%s device=%s)",
+        alert_id, source_id, rule_id, device_name,
+    )
+    return True
+
+
+# Matches the provenance line written above, so reuse-of-a-reuse replaces the
+# header rather than nesting one inside another.
+_REUSE_HEADER_RE = re.compile(r"^\(Reused from alert #\d+[^)]*\)\s*", re.DOTALL)
 
 
 def _infer_attack_type(rule_id: str) -> str:

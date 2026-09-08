@@ -872,6 +872,87 @@ def update_it_recommendation(
         return False
 
 
+def get_recent_it_recommendation(
+    rule_id: str,
+    device_name: str,
+    within_min: int,
+) -> tuple[int, str] | None:
+    """
+    Newest usable IT recommendation for the same rule on the same device inside
+    `within_min` minutes, as (source_alert_id, text). None when there is none.
+
+    Exists because the recommendation cache can never help a burst: its key is a
+    sha256 of a prompt that embeds the whole raw alert (timestamps, full_log,
+    paths), so ten repeats of one rule produce ten distinct keys and ten full
+    provider chains. This query is the burst's actual cache — same rule, same
+    machine, minutes apart is the same investigation.
+
+    Ordered by id, not timestamp: ids are monotonic and ours, while timestamp
+    comes from the alert payload and is attacker-influenced. The cutoff still
+    filters on timestamp because that is what "recent" means to an operator;
+    an alert with a bogus future timestamp can only make this MISS, never
+    return something older than the window.
+
+    AI_CHAIN_EXHAUSTED rows are excluded — that sentinel is a failure record,
+    not an answer, and copying it forward would spread one outage across every
+    later alert in the window.
+    """
+    if within_min <= 0:  # kill switch: config.IT_REC_REUSE_WINDOW_MIN = 0
+        return None
+    cutoff = (
+        datetime.now(tz=config.PHT) - timedelta(minutes=within_min)
+    ).isoformat()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, it_recommendation FROM alerts "
+            "WHERE rule_id = ? AND device_name = ? AND timestamp >= ? "
+            "  AND it_recommendation IS NOT NULL "
+            "  AND it_recommendation != '' AND it_recommendation != ? "
+            "ORDER BY id DESC LIMIT 1",
+            (str(rule_id), device_name, cutoff, config.AI_CHAIN_EXHAUSTED),
+        ).fetchone()
+    except Exception as e:
+        # A read that fails must not stop the caller from doing the real AI
+        # call — reuse is an optimisation, never a dependency.
+        logger.warning(
+            "get_recent_it_recommendation failed (rule_id=%s device=%s): %s",
+            rule_id, device_name, e,
+        )
+        return None
+    if row is None:
+        return None
+    return row["id"], row["it_recommendation"]
+
+
+def get_alerts_missing_it_recommendation(
+    max_age_hours: int,
+    limit: int,
+) -> list[dict]:
+    """
+    Open HIGH/CRITICAL alerts from the last `max_age_hours` with no IT
+    recommendation, oldest first. Feeds scheduler._it_rec_backfill.
+
+    Oldest-first because a backlog drains from the front; the operator looking
+    at a blank card is looking at the alert that has been blank longest.
+    Resolved alerts are skipped — nobody is investigating those any more.
+    """
+    cutoff = (
+        datetime.now(tz=config.PHT) - timedelta(hours=max_age_hours)
+    ).isoformat()
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, rule_id, device_name, raw_alert FROM alerts "
+        "WHERE timestamp >= ? AND resolved_at IS NULL "
+        "  AND severity IN ('HIGH', 'CRITICAL') "
+        "  AND (it_recommendation IS NULL OR it_recommendation = '' "
+        "       OR it_recommendation = ?) "
+        "ORDER BY id ASC LIMIT ?",
+        (cutoff, config.AI_CHAIN_EXHAUSTED, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def resolve_alert(alert_id: int, username: str, note: str = "") -> bool:
     """
     Mark an acknowledged alert as resolved. Only valid after IT ACK (acknowledged=1).
