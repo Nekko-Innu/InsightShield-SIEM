@@ -219,5 +219,5 @@
    Loaded only on the login page; the script no-ops if [data-status-dot]
    is absent so it's safe even if the block accidentally bleeds elsewhere. #}
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/login-status.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/login-status.js', v=build_time) }}" defer></script>
 {% endblock %}

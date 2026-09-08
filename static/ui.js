@@ -18,6 +18,33 @@
   }
   window.wpToast = toast;
 
+  // A toast with one action button. Same chrome as toast(), plus a labelled
+  // <button> that runs `onAction` and dismisses. Kept separate from toast()
+  // so the plain call stays a plain call — every other caller passes a string
+  // and wants nothing back.
+  function toastAction(message, label, onAction, category = 'info', ttl = 12000) {
+    if (!region) return;
+    const el = document.createElement('div');
+    el.className = 'toast toast-' + (category === 'warning' ? 'warn'
+                                   : category === 'error' ? 'error'
+                                   : category === 'success' ? 'success' : 'info');
+    el.setAttribute('role', 'status');
+    const text = document.createElement('span');
+    text.textContent = message;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = label;
+    btn.className = 'ml-3 px-2 py-0.5 rounded-md border border-surface-200 '
+                  + 'text-brand-700 font-semibold hover:bg-surface-50';
+    btn.addEventListener('click', () => { el.remove(); onAction(); });
+    el.append(text, btn);
+    region.appendChild(el);
+    // Longer default TTL than a plain toast: this one asks the reader to do
+    // something, so it has to outlive a glance at another window.
+    setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 200); }, ttl);
+  }
+  window.wpToastAction = toastAction;
+
   // Hydrate flash messages from server-rendered seed
   const seed = document.getElementById('flash-seed');
   if (seed) {
@@ -306,7 +333,13 @@
         const { latest_id } = await r.json();
         if (latest_id && String(latest_id) !== feed.dataset.latestId) {
           feed.dataset.latestId = String(latest_id);
-          toast('New alert received — refresh to view', 'warning', 6000);
+          // The toast used to say "refresh to view" and leave the manager to
+          // find the F5 key during the minutes an incident is unfolding. Now
+          // it is the button: click reloads, which re-runs the same query the
+          // page already runs and brings the KPI tiles along with the row.
+          // Reloading on a timer instead was rejected — during a burst it
+          // would repaint the page every 15s under whoever is reading it.
+          toastAction('New alert received', 'Reload', () => window.location.reload(), 'warning');
         }
       } catch { pollFailure('manager-feed', false); }
     }, 15000);

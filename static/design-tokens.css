@@ -258,14 +258,19 @@ body { margin: 0; line-height: 1.5; -webkit-font-smoothing: antialiased; }
    severity bar on each row stay anchored as new SSE alerts prepend. */
 .table-scroll  { max-height: 420px; overflow-y: auto; }
 
-/* Round K — IT dashboard only. The flat 420px cap showed 8 of 50 rows on a
-   1080p monitor while the page scrolled anyway; this ties the table to the
-   viewport instead. 320px subtracts the header, KPI strip, filter bar, pager
-   and footer; min-height keeps a usable table on a short laptop screen even
-   when the arithmetic goes negative. flex-1 + min-height:0 let the wrapper
-   fill the alerts card when the sidebar column is the taller of the two
-   (the grid row is items-stretch). The manager feed keeps plain
-   .table-scroll. */
+/* Round K. The flat 420px cap showed 8 of 50 rows on a 1080p monitor while
+   the page scrolled anyway; this ties the table to the viewport instead.
+   320px subtracts the header, KPI strip, filter bar, pager and footer;
+   min-height keeps a usable table on a short laptop screen even when the
+   arithmetic goes negative. flex-1 + min-height:0 let the wrapper fill the
+   alerts card when the sidebar column is the taller of the two (the grid row
+   is items-stretch).
+
+   Round L: the manager feed uses this too. It was on plain .table-scroll,
+   whose 420px showed FOUR of its cards — a feed row is a two-line card, not a
+   table row, so the cap that suits the IT table was never right for it. Both
+   pages now opt into body.viewport-fit, where the max-height below is dropped
+   entirely and the flex parent does the bounding. */
 .table-scroll--tall {
   max-height: calc(100vh - 320px);
   min-height: 320px;

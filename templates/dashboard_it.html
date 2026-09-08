@@ -241,7 +241,7 @@
    severity_update). Gated by current_user.is_it_admin so we
    don't ship the realtime module to manager dashboard or other pages. #}
 {% if current_user.is_it_admin %}
-<script src="{{ url_for('static', filename='js/sse.js') }}" defer></script>
-<script src="{{ url_for('static', filename='js/dashboard-it-realtime.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/sse.js', v=build_time) }}" defer></script>
+<script src="{{ url_for('static', filename='js/dashboard-it-realtime.js', v=build_time) }}" defer></script>
 {% endif %}
 {% endblock %}

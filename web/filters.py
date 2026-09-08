@@ -70,12 +70,41 @@ def url_with(**overrides) -> str:
     return url_for(request.endpoint, **{k: v for k, v in args.items() if v not in (None, "")})
 
 
+def _static_build_id() -> str:
+    """Cache-buster for /static assets, from the newest mtime under static/.
+
+    _base.html has always asked for `ui.js?v=build_time or '1'`, and nothing
+    ever defined build_time — so the query string was the literal string "1"
+    on every deploy this app has had. nginx serves /static/ with `expires 7d`
+    and `Cache-Control: public, immutable` (nginx/insightshield.conf), and
+    `immutable` means the browser does not revalidate even on a hard reload.
+    Every CSS and JS change therefore reached returning users up to a week
+    late, or not at all.
+
+    The newest mtime in the directory changes whenever any asset is deployed
+    and is stable across workers on the same release, so the URL changes
+    exactly when the bytes do. Computed once at startup, not per request:
+    walking the tree on every page render to produce a value that cannot
+    change while the process lives is a syscall storm for nothing.
+    """
+    newest = 0.0
+    static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+    for root, _dirs, files in os.walk(static_dir):
+        for name in files:
+            try:
+                newest = max(newest, os.path.getmtime(os.path.join(root, name)))
+            except OSError:
+                continue
+    return str(int(newest)) or "1"
+
+
 def init_app(app) -> None:
     app.add_template_filter(from_json_filter, "from_json")
     app.add_template_filter(pretty_json_filter, "pretty_json")
     app.add_template_filter(forensic_ts_filter, "forensic_ts")
     app.jinja_env.globals["derive_attacker_ip"] = derive_attacker_ip
     app.jinja_env.globals["url_with"] = url_with
+    app.jinja_env.globals["build_time"] = _static_build_id()
 
 
 def humanize_seconds(s) -> str:

@@ -190,6 +190,39 @@ def test_alerts_table_pages_past_the_first_fifty(page, live_server, live_server_
     assert "severity=HIGH" in page.get_attribute("a[rel='prev']", "href")
 
 
+def test_manager_feed_pages_past_the_first_fifty(page, live_server, live_server_db):
+    """The manager feed was a single 50-row window — limit=50, offset=0, no
+    page parameter — so an alert past row 50 was counted in the KPI tiles above
+    it and could not be opened from the page.
+
+    The poll baseline assertion is the other half: data-latest-id used to be
+    the first rendered row's id, which is only the newest alert while the feed
+    is unpaged. On page 2 that is a mid-table id, and ui.js compares it against
+    /api/alerts/latest every 15s — so the manager would be told a new alert had
+    arrived, forever, on every page but the first.
+    """
+    for i in range(60):
+        insert_alert(live_server_db, f"MGR-PAGING-{i:02d}")
+
+    _login(page, live_server, MANAGER)
+    page.goto(f"{live_server}/dashboard/manager")
+    assert page.locator("#alerts-feed li").count() == 50
+    assert "Showing 1–50 of" in page.locator("#pager-summary").text_content()
+    latest_page_one = page.get_attribute("#alerts-feed", "data-latest-id")
+
+    page.click("a[rel='next']")
+    page.wait_for_url("**/dashboard/manager?*page=2*")
+    assert page.locator("#alerts-feed li").count() > 0, "page 2 rendered no rows"
+
+    api_latest = page.request.get(f"{live_server}/api/alerts/latest").json()["latest_id"]
+    assert page.get_attribute("#alerts-feed", "data-latest-id") == latest_page_one
+    assert page.get_attribute("#alerts-feed", "data-latest-id") == str(api_latest)
+
+    # Out-of-range clamps to the last page rather than rendering an empty feed.
+    page.goto(f"{live_server}/dashboard/manager?page=999")
+    assert page.locator("#alerts-feed li").count() > 0
+
+
 def test_severity_bars_populate_from_the_api(page, live_server):
     _login(page, live_server, IT_ADMIN)
     page.goto(f"{live_server}/dashboard/it")

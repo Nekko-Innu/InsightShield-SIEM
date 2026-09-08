@@ -1,51 +1,31 @@
-{# Insight Shield — dashboard_manager.html (redesigned)
-   Drop-in replacement. No Python/route changes required.
-   Design: urgent-first layout with action queue + general feed.
+{# Insight Shield — dashboard_manager.html
+   KPI strip, shared filter toolbar, paged alert feed.
+
+   Round L: the urgent banner is gone. It counted with a Jinja expression over
+   `alerts` — the rows the route had already fetched, after filtering — so the
+   headline moved when the manager touched a view control and nothing had
+   happened on the branch. It also offered no action this role can take:
+   acknowledge and resolve are both IT_ADMIN-gated, so it was a red box that
+   said "IT has been notified" and linked to the feed directly below it. The
+   Critical (24h) and High (24h) tiles carry the same signal and they are
+   whole-table counts, not a scan of one page.
+
+   Round L also: the feed pages (the pager the IT table has always had), and
+   the whole dashboard fits the viewport on a large screen — see body_class.
 #}
 {% extends "_base.html" %}
 {% block title %}Manager Dashboard · Insight Shield{% endblock %}
 
+{# Opts into the shared viewport-fit layout in design-tokens.css: at
+   >=1280x700 the body becomes a 100vh flex column, so the KPI strip, filter
+   bar, feed, pager and footer are all on screen at once and only the feed
+   scrolls inside its own box. Below either dimension the rule set does not
+   apply and the page scrolls normally — a locked viewport on a small screen
+   just puts the pager and footer somewhere unreachable. #}
+{% block body_class %}viewport-fit{% endblock %}
+
 {% block content %}
 <h1 class="sr-only">Manager Dashboard</h1>
-
-{# ── Urgent banner — shown only when unacked HIGH/CRIT exist ── #}
-{% set urgent = alerts | selectattr('severity', 'in', ['HIGH', 'CRITICAL'])
-                        | rejectattr('acknowledged_at') | list %}
-{% if urgent %}
-<div class="rounded-xl border-2 px-5 py-4 mb-5 flex items-center justify-between gap-4"
-     style="background:var(--sev-crit-bg);border-color:var(--sev-crit-border);"
-     role="alert">
-  <div class="flex items-center gap-3">
-    <svg class="w-5 h-5 flex-shrink-0" aria-hidden="true"
-         style="color:var(--sev-crit-border);"
-         fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor">
-      <path stroke-linecap="round" stroke-linejoin="round"
-        d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71
-           c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5
-           -3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
-    </svg>
-    <div>
-      <div class="font-semibold text-sm" style="color:var(--sev-crit-fg);">
-        {{ urgent | length }} urgent alert{{ 's' if urgent | length != 1 }} — IT has been notified
-      </div>
-      <div class="text-xs text-slate-500 mt-0.5">
-        The IT team handles acknowledgment and resolution. Scroll to the feed below for context.
-      </div>
-    </div>
-  </div>
-  <a href="#feed-title"
-     class="flex items-center gap-1.5 text-sm font-semibold px-4 py-2 rounded-lg
-            text-white transition-colors flex-shrink-0"
-     style="background:var(--sev-crit-border);">
-    View feed
-    <svg class="w-4 h-4" aria-hidden="true" fill="none"
-         viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-      <path stroke-linecap="round" stroke-linejoin="round"
-        d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3"/>
-    </svg>
-  </a>
-</div>
-{% endif %}
 
 {# ── KPI strip ─────────────────────────────────────────────── #}
 {# UI rework Round C: literal hex colors swapped for --status-* tokens so
@@ -57,10 +37,13 @@
    so the at-a-glance KPI strip carries the same signal in 1/4 the
    vertical real-estate. Color thresholds match the login-page status:
    100% online → green; exactly 1 offline → amber; 2+ offline → red. #}
+{# Round L: agents_online / agents_total now arrive from the route. The count
+   used to be selectattr('status','equalto','active') here — case-sensitive —
+   while dashboards.py lowercased the same field. A single Wazuh agent
+   reporting "Active" made the tile read 4/5 in amber on a fleet that was
+   fully online. #}
 {% set hs      = health_score | default(100) %}
 {% set hs_color = 'var(--status-online)' if hs >= 80 else 'var(--status-degraded)' if hs >= 50 else 'var(--status-offline)' %}
-{% set agents_total   = agents | length %}
-{% set agents_online  = agents | selectattr('status', 'equalto', 'active') | list | length %}
 {% set agents_offline = agents_total - agents_online %}
 {% set agents_color =
   'var(--surface-300)'      if agents_total == 0
@@ -113,7 +96,14 @@
 </section>
 
 {# ── General alert feed ───────────────────────────────────── #}
-<section aria-labelledby="feed-title">
+{# flex-1 min-h-0 flex flex-col: inside the viewport-fit layout `main` is a
+   flex column, so this section takes the height the KPI strip and toolbar
+   leave and passes it down to .table-scroll--tall. min-h-0 is the
+   load-bearing half — a flex item defaults to min-height:auto and refuses to
+   shrink below its content, which is exactly what pushes a pager off the
+   bottom of the screen. Outside the gate `main` is a normal block and these
+   classes are inert. #}
+<section aria-labelledby="feed-title" class="flex-1 min-h-0 flex flex-col">
   <div class="flex items-center justify-between mb-2">
     <h2 id="feed-title" class="text-sm font-semibold text-slate-700">All recent alerts</h2>
     <span class="text-xs text-slate-400 flex items-center gap-1">
@@ -138,10 +128,13 @@
      navigates to another page. #}
   {% include "_alert_filters.html" %}
 
-  {# UI rework Round-C tweak: cap the manager alert feed at .table-scroll's
-     420px ceiling. The header above ("All recent alerts" + 15s heartbeat)
-     stays anchored on screen; only the feed scrolls when there are more
-     alerts than fit in the cap. #}
+  {# Round C capped this feed at .table-scroll's flat 420px. Round L swaps in
+     .table-scroll--tall, the same wrapper the IT table uses: viewport-relative
+     with a 320px floor, and max-height:none once body.viewport-fit is active
+     so the feed absorbs the slack instead of leaving a gap above the pager.
+     420px was showing four cards of a fifty-row page — a feed row is a
+     two-line card, not a table row, so the flat cap that suits the IT table
+     was never right here. #}
   <ul id="alerts-feed"
       {# This used to introspect url_for's globals to decide whether the
          endpoint existed, and fell back to "". ui.js reads an empty poll URL
@@ -149,8 +142,15 @@
          the feed refreshing with nothing on screen to say so. The endpoint is
          registered unconditionally. #}
       data-poll-url="{{ url_for('api.alerts_latest') }}"
-      data-latest-id="{{ alerts[0].id if alerts else '' }}"
-      class="space-y-2 table-scroll">
+      {# The table's MAX(id), from the route — not this page's first row. With
+         paging, the first row of page 2 is not the newest alert, and the poll
+         compares this against /api/alerts/latest. #}
+      data-latest-id="{{ latest_alert_id }}"
+      {# Both classes, like dashboard_it.html:67. --tall is a modifier: it sets
+         the height budget, while overflow-y:auto lives on the base
+         .table-scroll. With only the modifier the feed had a 452px box and
+         4757px of content spilling out of it, painting rows over the pager. #}
+      class="space-y-2 table-scroll table-scroll--tall">
 
     {% for a in alerts %}
     {% set sev = a.severity | lower %}
@@ -160,7 +160,9 @@
        <li> existed only to feed the browser-side filter, which is gone with
        its toolbar. Nothing reads them now, so a lowercase duplicate of every
        field on every row is no longer emitted on this page. #}
-    <li class="bg-white rounded-xl border border-surface-200 px-5 py-3.5 flex items-start justify-between gap-4"
+    {# px-4 py-2.5, was px-5 py-3.5. Under the fitted viewport every 8px of
+       card padding is an alert the manager cannot see without scrolling. #}
+    <li class="bg-white rounded-xl border border-surface-200 px-4 py-2.5 flex items-start justify-between gap-4"
         style="border-left:4px solid var(--sev-{{ cls }}-border);">
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2 mb-1 flex-wrap">
@@ -175,6 +177,17 @@
             <time datetime="{{ a.timestamp }}" data-humanize
                   title="{{ a.timestamp | forensic_ts }}">{{ a.timestamp }}</time>
           </span>
+        </div>
+        {# Title line. attack_type is the Wazuh rule description already stored
+           on every row — no new column, no migration. The feed used to open
+           straight into plain_text, so every card began with the same six
+           characters ("WHAT HA…") and the list could not be skimmed; the id and
+           rule id ride along muted for anyone cross-referencing with IT.
+           Plain text, not a link — the View button already goes to /alert/<id>
+           and a second target inside a card is a mis-click waiting to happen. #}
+        <div class="text-sm font-semibold text-slate-800 leading-snug truncate">
+          {{ a.attack_type | default('Alert') }}
+          <span class="font-mono text-xs font-normal text-slate-400">#{{ a.id }} · rule {{ a.rule_id }}</span>
         </div>
         <p class="text-sm text-slate-700 leading-snug line-clamp-2">{{ a.plain_text | default('—') }}</p>
       </div>
@@ -203,5 +216,19 @@
     </li>
     {% endfor %}
   </ul>
+
+  {# Outside the .table-scroll--tall wrapper deliberately: that element is the
+     one that scrolls, so a pager inside it would scroll away from the manager
+     trying to reach page 2. As the last flex child of the section it sits on
+     the bottom edge, above the footer, always on screen under viewport-fit.
+     Same partial, same `pager` dict shape and the same ui.js jump handler the
+     IT table has used since the paging work — this page just never built the
+     dict until now. #}
+  {# The partial's own chrome is a border-top strip, sized to sit on the bottom
+     edge of the IT alerts card. This feed is a list of loose cards, so it gets
+     a card of its own to sit in. #}
+  <div class="bg-white rounded-xl border border-surface-200 mt-2 overflow-hidden flex-shrink-0">
+    {% include "_pager.html" %}
+  </div>
 </section>
 {% endblock %}

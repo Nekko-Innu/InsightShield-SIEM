@@ -72,24 +72,57 @@ def _alerts_pager_filtered(filters: dict, page: int = 1) -> bool:
                 or filters["q"] or filters["hide_low"] or page > 1)
 
 
+def _build_pager(filters: dict, last_page: int, total: int) -> dict:
+    """The `pager` dict templates/_pager.html reads, plus the clamped page.
+
+    Both dashboards page the same table with the same filters and the same
+    per-page count, so the ?page= parsing and the six derived numbers live
+    here rather than being written twice — the manager copy of this arithmetic
+    is what was missing while its feed was stuck on offset=0.
+    """
+    try:
+        page = int(request.args.get("page", 1))
+    except (TypeError, ValueError):
+        page = 1
+    page = min(max(page, 1), last_page)
+    return {
+        "page": page, "last_page": last_page, "total": total,
+        "per_page": ALERTS_PER_PAGE,
+        "first_row": (page - 1) * ALERTS_PER_PAGE + 1 if total else 0,
+        "last_row": min(page * ALERTS_PER_PAGE, total),
+        "filtered": _alerts_pager_filtered(filters, page),
+    }
+
+
 @bp.route("/dashboard/manager")
 @login_required
 @role_required(ROLE_MANAGER)
 def dashboard_manager():
-    # Server-side filtering (same db.search_alerts path as the IT dashboard),
-    # persisted per session. The manager feed is a capped scroll list, not a
-    # paged table, so it keeps a single 50-row window — no pager UI — but the
-    # Status / Severity / Hide-low controls now actually reach the whole table.
+    # Server-side filtering and paging, same db.search_alerts path as the IT
+    # dashboard, filters persisted per session.
+    #
+    # The feed used to be a single 50-row window: limit=50, offset=0, no page
+    # parameter and a `pager` dict holding one flag. So an alert that fell past
+    # row 50 was counted in every tile on the page and could not be opened from
+    # it — the manager's only route to it was a filter narrow enough to pull it
+    # back inside the window. It now pages like the IT table.
     filters = _alert_filters_from_request()
+    total = db.count_alerts(
+        status=filters["status"] or None,
+        severity=filters["severity"] or None,
+        q=filters["q"] or None,
+        hide_low=filters["hide_low"],
+    )
+    last_page = max(1, -(-total // ALERTS_PER_PAGE))  # ceil
+    pager = _build_pager(filters, last_page, total)
     alerts = db.search_alerts(
         status=filters["status"] or None,
         severity=filters["severity"] or None,
         q=filters["q"] or None,
         hide_low=filters["hide_low"],
         limit=ALERTS_PER_PAGE,
-        offset=0,
+        offset=(pager["page"] - 1) * ALERTS_PER_PAGE,
     )
-    pager = {"filtered": _alerts_pager_filtered(filters)}
     score = health_score.calculate()
     agents = get_agent_status()
 
@@ -109,23 +142,36 @@ def dashboard_manager():
         ),
     }
 
-    # Devices — template reads devices[].name / .online.
-    devices = [
-        {"name": ag.get("name", "unknown"),
-         "online": (ag.get("status") or "").lower() == "active"}
-        for ag in agents
-    ]
+    # Agents — the template used to count these itself with
+    # selectattr('status', 'equalto', 'active'), a case-SENSITIVE compare,
+    # while this route lowercased the same field to build a `devices` list the
+    # template never rendered. One Wazuh agent reporting "Active" and the tile
+    # under-reported the fleet in red on a healthy branch. Counted once, here,
+    # the same way dashboard_it does it.
+    agents_total = len(agents)
+    agents_online = sum(1 for ag in agents if (ag.get("status") or "").lower() == "active")
 
+    # The feed's poll baseline. It used to be `alerts[0].id` in the template —
+    # fine while the page was always the newest 50 rows, wrong the moment the
+    # feed can page: on page 2 the first row is not the newest alert, so the
+    # 15s poll compared the table's MAX(id) against a mid-table id, found them
+    # different every single time, and would have toasted "new alert" forever.
+    # Same value /api/alerts/latest returns, so an unchanged table compares
+    # equal.
+    latest_alert_id = db.get_latest_alert_id() or ""
+
+    # `devices` and `user` are gone from this context: nothing in the template
+    # read either (it uses current_user from the base layout).
     return render_template(
         "dashboard_manager.html",
         alerts=alerts,
         health_score=score,
-        user=current_user,
-        agents=agents,
+        agents_online=agents_online,
+        agents_total=agents_total,
         summary=summary,
-        devices=devices,
         filters=filters,
         pager=pager,
+        latest_alert_id=latest_alert_id,
     )
 
 
@@ -150,30 +196,19 @@ def dashboard_it():
         hide_low=filters["hide_low"],
     )
     last_page = max(1, -(-total // ALERTS_PER_PAGE))  # ceil
-    try:
-        page = int(request.args.get("page", 1))
-    except (TypeError, ValueError):
-        page = 1
-    page = min(max(page, 1), last_page)
+    # The template hands pager.filtered to dashboard-it-realtime.js as
+    # data-filtered, so a live alert that may not belong on the current page
+    # becomes a "N new alerts · Reload" chip instead of a row that ignores the
+    # active filter.
+    pager = _build_pager(filters, last_page, total)
     alerts = db.search_alerts(
         status=filters["status"] or None,
         severity=filters["severity"] or None,
         q=filters["q"] or None,
         hide_low=filters["hide_low"],
         limit=ALERTS_PER_PAGE,
-        offset=(page - 1) * ALERTS_PER_PAGE,
+        offset=(pager["page"] - 1) * ALERTS_PER_PAGE,
     )
-    # The template hands this to dashboard-it-realtime.js as data-filtered, so
-    # a live alert that may not belong on the current page becomes a "N new
-    # alerts · Reload" chip instead of a row that ignores the active filter.
-    pager = {
-        "page": page, "last_page": last_page, "total": total,
-        "per_page": ALERTS_PER_PAGE,
-        "first_row": (page - 1) * ALERTS_PER_PAGE + 1 if total else 0,
-        "last_row": min(page * ALERTS_PER_PAGE, total),
-        "filtered": bool(filters["status"] or filters["severity"]
-                         or filters["q"] or filters["hide_low"] or page > 1),
-    }
     cache_stats = cache.get_stats()
     agents = get_agent_status()
 

@@ -21,14 +21,14 @@
      it. The vendored file was already sitting in static/vendor/ as the
      fallback; it is just the source now. See static/vendor/VERSIONS.md. #}
   <script src="{{ url_for('static', filename='vendor/tailwindcss-3.4.3.min.js') }}"></script>
-  <link rel="stylesheet" href="{{ url_for('static', filename='design-tokens.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design-tokens.css', v=build_time) }}">
   {# Round G follow-up: report-specific Bureau body + Marker print
      stylesheet, conditionally loaded only on /report and /report.pdf
      so the rest of the dashboard isn't shipped ~250 lines of
      report-only CSS. See docs/security-audit-report.md and
      static/report-bureau.css for the full treatment. #}
   {% if request.endpoint in ('reports.report', 'reports.report_pdf') %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='report-bureau.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='report-bureau.css', v=build_time) }}">
   {% endif %}
   <script>
     tailwind.config = {
@@ -191,7 +191,7 @@
     <span>Insight Shield v1.5.1 &middot; DLSL-IT Cybersecurity Capstone</span>
   </footer>
 
-  <script src="{{ url_for('static', filename='ui.js', v=build_time or '1') }}" defer></script>
+  <script src="{{ url_for('static', filename='ui.js', v=build_time) }}" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
