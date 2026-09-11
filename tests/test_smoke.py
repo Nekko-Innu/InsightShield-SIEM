@@ -175,6 +175,24 @@ def test_post_without_csrf_token_is_rejected(page, live_server):
     assert resp.json()["error"] == "csrf"
 
 
+def test_focus_mode_switch_relabels_hide_low(page, live_server):
+    """Settings card -> plain-setting route -> dashboard button label."""
+    _login(page, live_server, IT_ADMIN)
+    page.wait_for_url(re.compile(r"/dashboard/it"))
+    assert "Awaiting ack" in page.content()
+    page.goto(f"{live_server}/admin/settings?tab=service")
+    page.get_by_role("button", name="Off", exact=True).click()
+    page.wait_for_url(re.compile(r"tab=service"))
+    assert "Focus Mode on." in page.content()
+    page.goto(f"{live_server}/dashboard/it")
+    assert "Hide low &amp; medium" in page.content()
+    # Switch back so later tests see the default label.
+    page.goto(f"{live_server}/admin/settings?tab=service")
+    page.get_by_role("button", name="On", exact=True).click()
+    page.wait_for_url(re.compile(r"tab=service"))
+    assert "Focus Mode off." in page.content()
+
+
 def test_logout_rejects_get(page, live_server):
     """GET /logout was a one-click forced logout via <img src>. POST only now."""
     _login(page, live_server, IT_ADMIN)

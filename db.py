@@ -450,7 +450,14 @@ def _alert_filter_clauses(status: str | None = None,
         params.append(severity)
 
     if hide_low:
-        clauses.append("severity NOT IN ('LOW', 'INFORMATIONAL')")
+        # Focus Mode (admin setting) widens "Hide low severity" to MEDIUM too,
+        # leaving only the HIGH/CRITICAL rows IT actually has to act on. Read
+        # here, not by the callers, so the page and the pager count can't
+        # disagree about what the button hides.
+        if get_setting("alert_focus_mode") == "1":
+            clauses.append("severity NOT IN ('LOW', 'INFORMATIONAL', 'MEDIUM')")
+        else:
+            clauses.append("severity NOT IN ('LOW', 'INFORMATIONAL')")
 
     if q:
         # raw_alert is in here because it is the only place the attacker IP
@@ -618,6 +625,25 @@ def count_open_alerts() -> int:
     conn = _get_conn()
     row = conn.execute(
         "SELECT COUNT(*) AS n FROM alerts WHERE resolved = 0 OR resolved IS NULL"
+    ).fetchone()
+    return int(row["n"] or 0)
+
+
+def count_awaiting_ack() -> int:
+    """
+    HIGH/CRITICAL alerts nobody has acknowledged yet — the IT dashboard's
+    to-do count. Replaced the 24h MTTA tile there, which sat on "—" whenever
+    no serious alert had been acked that day and told the admin nothing to
+    act on. The severity guard keeps pre-lifecycle sub-HIGH rows (never
+    auto-closed) out of the count.
+    """
+    sevs = sorted(config.ACTIONABLE_SEVERITIES)
+    conn = _get_conn()
+    row = conn.execute(
+        f"SELECT COUNT(*) AS n FROM alerts "
+        f"WHERE COALESCE(acknowledged, 0) = 0 AND COALESCE(resolved, 0) = 0 "
+        f"AND severity IN ({','.join('?' * len(sevs))})",
+        sevs,
     ).fetchone()
     return int(row["n"] or 0)
 

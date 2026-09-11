@@ -110,7 +110,7 @@ def init_app(app) -> None:
 def humanize_seconds(s) -> str:
     """Render a seconds value in the largest unit that keeps the number small:
     <60s → '45s', <1h → '12m 34s', <1d → '4h 53m', ≥1d → '3d 7h'.
-    Used by the 24h MTTA KPI so 283220s reads as '3d 7h' instead of a
+    Used by the login lockout flash so 283220s reads as '3d 7h' instead of a
     barely-parseable seconds count."""
     try:
         s = float(s)
