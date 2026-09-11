@@ -128,7 +128,8 @@ def test_suspicious_program_rule_ignores_the_agents_own_commands():
 
 
 def test_time_windows_are_written_in_utc():
-    # The manager's clock is UTC; PHT windows fired 8 hours off.
+    # wazuh-analysisd checks <time> in UTC (alerts stamped +0000) even though
+    # the host clock is PHT; PHT windows fired 8 hours off.
     windows = {r.get("id"): r.findtext("time") for r in _rules() if r.findtext("time")}
     assert windows == {"100002": "13:00 - 00:00", "100043": "00:00 - 13:00",
                        "100050": "00:00 - 13:00", "100051": "00:00 - 13:00",

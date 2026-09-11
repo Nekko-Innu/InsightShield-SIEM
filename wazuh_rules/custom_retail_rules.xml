@@ -18,11 +18,14 @@
   per-file description would buy one AI call per encrypted file. The path is
   in the alert's attack trail.
 
-  <time> WINDOWS are read on the manager's own clock, and the manager runs on
-  UTC (its alerts are stamped +0000). Every window below is PHT minus 8 h:
-  business hours 08:00-21:00 PHT = 00:00-13:00 UTC. Written in PHT they fired
-  8 hours off — "after hours" landed on 05:00-16:00 PHT. If the manager is
-  ever moved to Asia/Manila time, convert these back.
+  <time> WINDOWS are read in UTC. The host clock is PHT (Suricata stamps
+  +0800, systemd prints PST), but wazuh-analysisd sees UTC — its alerts are
+  stamped +0000 — and <time> is checked against analysisd's clock. Every
+  window below is PHT minus 8 h: business hours 08:00-21:00 PHT = 00:00-13:00
+  UTC. Written in PHT they fired 8 hours off: "after hours" landed on
+  05:00-16:00 PHT (100002 fired at 15:37 PHT). If alerts.json timestamps
+  ever start ending in +0800, analysisd has picked up the host zone and
+  these must go back to PHT.
 
   RULE LEVEL MAPPING TO INSIGHT SHIELD SEVERITY TIERS:
     Level  2-4  → Informational
