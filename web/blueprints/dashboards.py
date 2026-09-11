@@ -15,7 +15,6 @@ import db
 import health_score
 from decorators import ROLE_MANAGER, role_required
 from wazuh_api import get_agent_status
-from web.filters import humanize_seconds
 from web.responses import dashboard_for_role
 
 logger = logging.getLogger("insightshield.web.dashboards")
@@ -70,6 +69,12 @@ def _alerts_pager_filtered(filters: dict, page: int = 1) -> bool:
     """Whether any filter (or a non-first page) is active — drives the Clear link."""
     return bool(filters["status"] or filters["severity"]
                 or filters["q"] or filters["hide_low"] or page > 1)
+
+
+def _focus_mode() -> bool:
+    """Admin's Focus Mode switch — only relabels the Hide-low button here; the
+    filtering itself happens in db._alert_filter_clauses."""
+    return _request_cache.cached_setting("alert_focus_mode") == "1"
 
 
 def _build_pager(filters: dict, last_page: int, total: int) -> dict:
@@ -171,6 +176,7 @@ def dashboard_manager():
         summary=summary,
         filters=filters,
         pager=pager,
+        focus_mode=_focus_mode(),
         latest_alert_id=latest_alert_id,
     )
 
@@ -235,11 +241,10 @@ def dashboard_it():
         agents_color = "var(--status-degraded)"
     else:
         agents_color = "var(--status-offline)"
-    # Row-level average over a 24h window. metrics["response_times"] is still
-    # rendered per-severity further down the page; it just no longer feeds a
-    # mean-of-means into this tile.
-    mtta_secs = db.mtta_seconds(hours=24)
-    mtta = humanize_seconds(mtta_secs) if mtta_secs is not None else "—"
+    # HIGH/CRITICAL still waiting for an IT ack. This tile used to be 24h MTTA,
+    # which read "—" on any day nobody acked a serious alert and measured the
+    # admin against themselves; db.mtta_seconds still exists for reporting.
+    awaiting_ack = db.count_awaiting_ack()
     # Count BURST_ABSORBER skips in the last 24h for the Groq KPI tile (F9).
     try:
         today = datetime.now(tz=config.PHT).strftime("%Y-%m-%d")
@@ -266,7 +271,9 @@ def dashboard_it():
 
     kpi = {
         "open": open_count,
-        "mtta": mtta,
+        "awaiting_ack": awaiting_ack,
+        # Red while anything is waiting, default ink at zero.
+        "awaiting_ack_color": "var(--status-offline)" if awaiting_ack else None,
         "agents": f"{active_agents}/{agents_total}",
         "agents_color": agents_color,
         "groq": groq_kpi,
@@ -283,6 +290,7 @@ def dashboard_it():
         user=current_user,
         filters=filters,
         pager=pager,
+        focus_mode=_focus_mode(),
         primary_provider_label=_resolve_primary_provider_label(),
     )
 

@@ -93,7 +93,7 @@ def admin_settings():
     for key in (
         "telegram_it_chat_id", "telegram_manager_chat_id",
         "gmail_address", "manager_phone", "it_admin_phone", "it_admin_email",
-        "wazuh_api_url", "wazuh_api_user",
+        "wazuh_api_url", "wazuh_api_user", "alert_focus_mode",
     ):
         settings_kv[key] = db.get_setting(key)
 
@@ -406,6 +406,7 @@ _SETTINGS_WRITE_ALLOWLIST = {
     "it_admin_email",
     "wazuh_api_url",
     "wazuh_api_user",
+    "alert_focus_mode",   # "1" = Hide-low also hides MEDIUM; anything else = off
 }
 
 @bp.route("/admin/settings/<key>", methods=["POST"])
@@ -438,7 +439,10 @@ def admin_settings_set_setting(key):
         ip=request.remote_addr,
         details={"value": value},
     )
-    flash(f"{key} saved.", "success")
+    if key == "alert_focus_mode":
+        flash(f"Focus Mode {'on' if value == '1' else 'off'}.", "success")
+    else:
+        flash(f"{key} saved.", "success")
     return redirect(url_for("admin_settings.admin_settings", tab="service"))
 
 # ── /admin/settings/toggle/<service> (Round F §17.1c) ───────────────────────

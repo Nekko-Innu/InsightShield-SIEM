@@ -61,7 +61,8 @@
                    hover:bg-surface-50 peer-checked:bg-brand-600 peer-checked:text-white
                    peer-checked:border-brand-600 peer-checked:hover:bg-brand-700
                    peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500">
-        Hide low severity
+        {# Focus Mode (admin Settings) makes this hide MEDIUM too. #}
+        {% if focus_mode %}Hide low &amp; medium{% else %}Hide low severity{% endif %}
       </span>
     </label>
   </div>

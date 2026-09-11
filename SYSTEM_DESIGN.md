@@ -624,7 +624,7 @@ The `Dashboard` link points at the role-aware `/dashboard` alias, which 302-redi
 | Position | Label                                   | Source |
 |----------|-----------------------------------------|--------|
 | 1        | Open alerts                             | unacked alert count |
-| 2        | 24h MTTA                                | mean time to ACK over 24h, or `—` |
+| 2        | Awaiting ack                            | unacked HIGH/CRITICAL count (`db.count_awaiting_ack`); red when > 0. Replaced 24h MTTA, which stays in `db.mtta_seconds` for reporting |
 | 3        | Active agents                           | from `get_agent_status()` |
 | 4        | `<primary_provider> used`               | label of the top-position active provider + cache hit count |
 
