@@ -362,7 +362,7 @@ sudo /var/ossec/bin/wazuh-logtest -t     # must exit 0
 sudo systemctl restart wazuh-manager
 ```
 
-27 rules in ids `100001`–`100056`, group `insightshield_retail`. Level mapping
+30 rules in ids `100001`–`100056`, group `insightshield_retail`. Level mapping
 matches `wazuh_receiver.LEVEL_MAP` exactly:
 
 | Wazuh level | Insight Shield severity |
@@ -446,6 +446,82 @@ Two rule groups need agent-side setup, or they can never fire:
 - **File integrity monitoring** — rules `100011`, `100012`, `100044`–`100047`
   need a `<syscheck>` block watching `C:\POS\shared` in realtime or at
   `<frequency>30</frequency>`.
+
+The MitM rules `100020`–`100022` need **arpwatch** on the manager instead,
+watching the branch LAN interface and logging to syslog, which Wazuh already
+reads (`sudo apt install arpwatch`, then `sudo systemctl enable --now
+arpwatch@<iface>`). They escalate the stock arpwatch rules 7201, 7202, 7204 and
+7209; without arpwatch they stay silent.
+
+#### Agent setup for the attack rules
+
+`wazuh_rules/agent.conf` is installed by `scripts/install.sh` to
+`/var/ossec/etc/shared/default/agent.conf` and synced to agents automatically.
+It adds the Sysmon channel, realtime FIM on `C:\POS` and `C:\POS\shared`, and
+two command monitors: `arp-gateway` (rule `100023`, watches the gateway's MAC,
+every 30 s) and `syn-watch` (rule `100031`, half-open connections / segments
+per second, every 10 s).
+
+Once per Windows host, in an admin PowerShell — Wazuh refuses manager-pushed
+commands until the agent opts in:
+
+```powershell
+$c = "C:\Program Files (x86)\ossec-agent\local_internal_options.conf"
+if (-not (Select-String -Path $c -Pattern "remote_commands" -Quiet)) {
+  Add-Content $c "logcollector.remote_commands=1"
+}
+Restart-Service WazuhSvc
+```
+
+Then check, on the same host:
+
+- **Gateway.** `(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort RouteMetric | Select -First 1).NextHop`
+  must be the LAN gateway, not a Tailscale hop.
+- **Sysmon Event 10.** `Get-WinEvent -LogName Microsoft-Windows-Sysmon/Operational -FilterXPath "*[System[EventID=10]]" -MaxEvents 1`.
+  If it returns nothing, add
+  `<ProcessAccess onmatch="include"><TargetImage condition="end with">lsass.exe</TargetImage></ProcessAccess>`
+  to the Sysmon config and reload it with `Sysmon64.exe -c <config>`. Rule
+  `100010` and stock `92900` depend on it.
+- **Audit policy.** Set by GUID so it works on any Windows display language,
+  then verify with `auditpol /get /category:*`. Works on Windows 10 Home too —
+  only the `secpol.msc` GUI is missing there.
+
+  ```powershell
+  auditpol /set /subcategory:"{0CCE9215-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable  # Logon
+  auditpol /set /subcategory:"{0CCE921B-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable  # Special Logon
+  auditpol /set /subcategory:"{0CCE9235-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable  # User Account Management
+  auditpol /set /subcategory:"{0CCE9237-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable  # Security Group Management
+  auditpol /set /subcategory:"{0CCE922B-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable  # Process Creation
+  auditpol /set /subcategory:"{0CCE9227-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable  # Other Object Access Events
+  auditpol /set /subcategory:"{0CCE9248-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable  # Plug and Play Events
+  ```
+- **Edition.** `(Get-ComputerInfo).WindowsEditionId` — Home has no RDP host,
+  so test brute force over SMB (445) there.
+
+**Optional manager sensors** — only if the Proxmox bridge lets `wazuh-system`
+see POS traffic. Check with `tcpdump` on the LAN interface while running an
+`nmap` against a POS host. If it passes: arpwatch (above), and Suricata with
+`eve.json` read by Wazuh in `ossec.conf`:
+
+```xml
+<localfile>
+  <log_format>json</log_format>
+  <location>/var/log/suricata/eve.json</location>
+</localfile>
+```
+
+plus two local Suricata rules, whose `msg` prefixes rules `100030`/`100040` match:
+
+```
+# Renaming a msg here means renaming the <field name="alert.signature"> in custom_retail_rules.xml.
+alert tcp any any -> $HOME_NET any (msg:"InsightShield SYN flood"; flags:S,12; flow:stateless; threshold: type both, track by_dst, count 100, seconds 1; classtype:attempted-dos; sid:9100040; rev:1;)
+alert tcp any any -> $HOME_NET any (msg:"InsightShield port scan"; flags:S,12; flow:stateless; threshold: type both, track by_src, count 20, seconds 3; classtype:attempted-recon; sid:9100030; rev:1;)
+```
+
+Test the port scan with `nmap -sS`, not `--rand-source` — random sources defeat
+`track by_src`. If the bridge check fails, `100020`–`100022`, `100030` and
+`100040` stay silent; the victim-side `100023` and `100031` still cover ARP
+spoofing and SYN flood.
 
 ---
 
@@ -1051,20 +1127,6 @@ Still outstanding, both cosmetic:
 | Where | Says | Reality |
 |---|---|---|
 | `gunicorn.conf.py` header | deploy to `/opt/insightshield/gunicorn.conf.py` | The unit loads `/opt/insightshield/insightshield/gunicorn.conf.py` |
-
-Also worth knowing, two separate `attack_type` labelling bugs in
-`wazuh_receiver._infer_attack_type`:
-
-1. It maps rule ids 100020–100029 to "Ransomware" and 100030–100039 to
-   "ARP-MitM", but in `custom_retail_rules.xml` 100020–100022 *are* the ARP/MitM
-   rules and nothing exists in the 100030s. Attack-type labels on those three
-   rules read wrong.
-2. Its ranges stop at 100049, but the file defines seven baseline rules at
-   **100050–100056** (the "Baseline ×7" counted in §4.1). All seven fall past
-   the last range to `rule_map.get(rule_id, "Unknown")` and land in the database
-   with `attack_type = "Unknown"`. That column feeds `db.get_top_threats` and the
-   AI executive-summary prompt, so the mislabelling propagates into the audit
-   report. Fix is a `100050 <= rid <= 100056` branch alongside the others.
 
 ---
 

@@ -222,10 +222,39 @@ install -m 644 "$APP/logrotate/insightshield" /etc/logrotate.d/insightshield \
 # ── 7. Wazuh rules and integrator (B2, B3) ───────────────────────────────────
 
 if [ "$HAVE_WAZUH" = 1 ]; then
-  # install(1) sets mode and ownership in the same call and is idempotent.
-  install -o root -g wazuh -m 660 "$APP/wazuh_rules/custom_retail_rules.xml" \
-    /var/ossec/etc/rules/ && pass "wazuh: custom_retail_rules.xml installed" \
-    || fail "wazuh: could not install rules"
+  # install(1) sets mode and ownership in the same call. Compare first: new
+  # rules only load on a manager restart, and WAZUH_CHANGED is what asks for one.
+  if cmp -s "$APP/wazuh_rules/custom_retail_rules.xml" /var/ossec/etc/rules/custom_retail_rules.xml; then
+    pass "wazuh: custom_retail_rules.xml already current"
+  elif install -o root -g wazuh -m 660 "$APP/wazuh_rules/custom_retail_rules.xml" \
+         /var/ossec/etc/rules/; then
+    WAZUH_CHANGED=1
+    pass "wazuh: custom_retail_rules.xml installed"
+  else
+    fail "wazuh: could not install rules"
+  fi
+
+  # Centralized agent config, pushed to every agent in the default group.
+  # Validated before it lands: whatever sits in shared/ goes out to the agents,
+  # so a file verify-agent-conf rejects must never be installed.
+  AGENT_CONF=/var/ossec/etc/shared/default/agent.conf
+  if cmp -s "$APP/wazuh_rules/agent.conf" "$AGENT_CONF"; then
+    pass "wazuh: agent.conf already current"
+  else
+    AGENT_CONF_OK=1
+    if [ ! -x /var/ossec/bin/verify-agent-conf ]; then
+      warn "wazuh: verify-agent-conf not found — agent.conf installed unvalidated"
+    elif ! /var/ossec/bin/verify-agent-conf -f "$APP/wazuh_rules/agent.conf" >/dev/null 2>&1; then
+      AGENT_CONF_OK=0
+      fail "wazuh: agent.conf rejected — NOT installed, agents keep the previous one"
+      fail "      run '/var/ossec/bin/verify-agent-conf -f $APP/wazuh_rules/agent.conf' for the error"
+    fi
+    if [ "$AGENT_CONF_OK" = 1 ]; then
+      install -o wazuh -g wazuh -m 660 "$APP/wazuh_rules/agent.conf" "$AGENT_CONF" \
+        && { WAZUH_CHANGED=1; pass "wazuh: agent.conf installed to shared/default"; } \
+        || fail "wazuh: could not install agent.conf"
+    fi
+  fi
 
   install -o root -g wazuh -m 750 "$APP/wazuh_rules/custom-insightshield" \
     /var/ossec/integrations/ \

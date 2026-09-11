@@ -234,16 +234,16 @@
 │   ├─ Sender MAC: {{ arp.sender_mac|default("—") }}
 │   ├─ Target IP:  {{ arp.target_ip|default("—") }}
 │   └─ Target MAC: {{ arp.target_mac|default("—") }}
-{%- elif rid == "100030" %}
+{%- elif rid in ("100030", "100040", "100041") %}
+│   ├─ Source IP: {{ tdata.src_ip|default("—") }}
+│   ├─ Dest IP:   {{ tdata.dest_ip|default("—") }}
+│   ├─ Dest port: {{ tdata.dest_port|default("—") }}
+│   └─ Signature: {{ (tdata.alert.signature if tdata.alert is mapping else none)|default("—", true) }}
+{%- elif rid in ("100044", "100045", "100046", "100047") %}
 │   ├─ Path:           {{ tdata.path|default("—") }}
 │   ├─ Syscheck path:  {{ sys.path|default("—") }}
 │   ├─ Syscheck event: {{ sys.event|default("—") }}
 │   └─ Renamed count:  {{ tdata.files_renamed_count|default("—") }}
-{%- elif rid == "100040" %}
-│   ├─ Protocol:  {{ tdata.proto|default("—") }}
-│   ├─ Flags:     {{ tdata.flags|default("—") }}
-│   ├─ Dest port: {{ tdata.dstport|default("—") }}
-│   └─ Count:     {{ tdata.count|default("—") }}
 {%- elif rid == "100002" %}
 │   ├─ Event ID:    {{ tdata.eventID|default("—") }}
 │   ├─ Status:      {{ tdata.status|default("—") }}

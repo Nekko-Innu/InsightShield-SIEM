@@ -88,8 +88,8 @@ Optional:
 | Field | Behaviour if absent |
 |---|---|
 | `timestamp` | generated server-side, `datetime.now(tz=config.PHT).isoformat()` |
-| `description` | defaults to `"Wazuh alert rule_id=<id>"` |
-| `attack_type` | inferred from `rule_id` — see §7 |
+| `description` | defaults to `"Wazuh alert rule_id=<id>"`. Over 512 characters it is **truncated** to 512 (warning logged), not rejected — Wazuh fills descriptions from event fields, and a deep path used to bounce a real attack's alert |
+| `attack_type` | inferred from `rule_id` — see §7. Must be a string of at most 64 characters; longer is rejected `400` |
 | nested Wazuh blocks (`agent`, `rule`, `manager`, `decoder`, `location`, `input`, `id`, `full_log`, `data`) | Attack Trail is built from whatever is present |
 
 `rule_id` and `device_name` are length-bounded because both land in the alerts table and
@@ -115,33 +115,55 @@ Used only when the payload has no explicit `severity`. `alerts_util.LEVEL_MAP`:
 
 ## 7. `attack_type` derivation
 
-`wazuh_receiver._infer_attack_type(rule_id)` checks custom rule ranges first, then a
-static map of stock Wazuh rule ids, then falls back to `"Unknown"`.
+`wazuh_receiver.attack_label(rule_id, payload)`: an explicit `attack_type` in the payload
+wins; otherwise the rule id is looked up in `wazuh_receiver.ATTACK_LABELS`, one label per
+rule in the form `<plain name> · <STRIDE category>`. A rule not in the map stores Wazuh's
+own rule `description` **in full** (up to the 512 cap in §5; no 64-character cut). Only when
+that is missing, or is the integrator's `"Wazuh rule <id>"` placeholder, does it fall back
+to `"Unknown"`.
 
-| Rule id range | Attack type |
+| Rule id | Attack type |
 |---|---|
-| 100001–100009 | `[S] RDP Brute-force` |
-| 100010–100019 | `[I] LSASS Credential Dump` |
-| 100020–100029 | `[T/D] Ransomware` |
-| 100030–100039 | `[T] ARP-MitM` |
-| 100040–100043 | `[D] SYN-flood` |
-| 100044–100049 | `[T/D] Ransomware` |
+| 100001 | Brute-force login attempt · Spoofing |
+| 100002 | Admin login after business hours · Spoofing |
+| 100003 | New user account created · Elevation of privilege |
+| 100004 | User added to Administrators · Elevation of privilege |
+| 100010 | POS memory scraping (card data theft) · Information disclosure |
+| 100011 | POS program files changed · Tampering |
+| 100012 | Program dropped into POS folder · Tampering |
+| 100013 | New Windows service installed · Elevation of privilege |
+| 100014 | Suspicious program launched · Tampering |
+| 100020 | ARP spoofing (man-in-the-middle) · Spoofing |
+| 100021 | Duplicate IP address (possible MitM) · Spoofing |
+| 100022 | New device seen on network · Information disclosure¹ |
+| 100023 | Gateway address hijacked on this PC (ARP spoofing) · Spoofing |
+| 100030 | Port scan · Information disclosure¹ |
+| 100031 | SYN flood on this PC · Denial of service |
+| 100040 | Network flood (SYN) · Denial of service |
+| 100041 | Sustained network flood · Denial of service |
+| 100042 | POS service crashed · Denial of service |
+| 100043 | POS service stopped · Denial of service |
+| 100044 | File changed in POS shared folder · Tampering |
+| 100045 | Ransomware-style file rename · Tampering |
+| 100046 | Ransomware: mass file changes · Tampering, Denial of service |
+| 100047 | Ransomware: encryption confirmed · Tampering, Denial of service |
+| 100050 | Baseline: login in business hours |
+| 100051 | Baseline: service started |
+| 100052 | Baseline: Windows Update |
+| 100053 | Baseline: USB storage |
+| 100054 | Baseline: password reset |
+| 100055 | Baseline: scheduled task |
+| 100056 | Baseline: explicit credentials |
+| 60122 (stock) | Failed login · Spoofing |
+| 60204 (stock) | Repeated failed logins · Spoofing |
+| 92900 (stock) | Credential dumping (LSASS) · Information disclosure |
 
-Stock Wazuh ids mapped individually: `87701/87702/87710` (LSASS), `60122/60204/60106`
-(RDP), `31151/31152/31153` (SYN-flood), `5402/5403/5404` (ARP-MitM), `554/550`
-(ransomware via syscheck FIM).
+¹ STRIDE has no reconnaissance category; "Information disclosure" is the closest fit.
 
-> ### Known gap — rules 100050–100056 land as "Unknown"
->
-> The ranges stop at `100049`, but `custom_retail_rules.xml` defines seven baseline rules
-> at **100050–100056**. All seven fall through to `rule_map.get(rule_id, "Unknown")`.
->
-> This is not cosmetic: `attack_type` feeds `db.get_top_threats` and the AI
-> executive-summary prompt, so the mislabelling propagates into the audit report.
->
-> Fix is one more branch alongside the others. Separately, note that 100020–100029 is
-> mapped to Ransomware while 100020–100022 are the ARP/MitM rules in the XML — those three
-> are mislabelled too.
+Every other stock rule is deliberately unmapped and shows Wazuh's own description —
+the ids once mapped here were other things entirely: `5402–5404` sudo,
+`87701/87702` pfSense, `60106` a successful logon, `31151–31153` web-log rules,
+`550/554` every FIM change.
 
 ## 8. Responses
 
@@ -215,7 +237,7 @@ not ship `requests`. Its timeout is 10s. It logs to `/var/ossec/logs/integration
 | `403`, both values match | Source IP not allowlisted, or `ProxyFix` not applied | Check `request.remote_addr` in the app log against §2 |
 | `429` | Over 120/min from one source | Expected under a rule storm. If sustained, a rule is too noisy — tune it in Wazuh, not here |
 | `413` | Alert body over 256 KB | Usually an enormous `full_log`. `_extract_attack_trail` caps `full_log` at 4096 bytes on storage, but the cap here applies to the whole request |
-| Alerts arrive with `attack_type = "Unknown"` | Rule id outside every mapped range — most likely 100050–100056 | See §7 |
+| Alerts arrive with `attack_type = "Unknown"` | Rule id not in `ATTACK_LABELS` **and** no usable `description` in the payload | See §7; check the integrator is sending `description` |
 | Nothing arrives, no log lines at all | Integrator not installed or not firing | `tail /var/ossec/logs/integrations.log`; confirm the `<integration>` block and `systemctl status wazuh-manager` |
 
 ---

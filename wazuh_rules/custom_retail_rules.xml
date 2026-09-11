@@ -3,12 +3,22 @@
   custom_retail_rules.xml
   Insight Shield — Wazuh Custom Rules for Southern's Twin Supermart (Lipa Branch)
   Covers: POS Malware, MitM, Unauthorized Access, Ransomware (FIM), DoS
-  
-  INSTALLATION:
-    1. Copy this file to /var/ossec/etc/rules/custom_retail_rules.xml on the Wazuh manager (VM-03)
-    2. Restart Wazuh manager: sudo systemctl restart wazuh-manager
-    3. Verify rules loaded: sudo /var/ossec/bin/ossec-logtest
-  
+
+  INSTALLATION: scripts/install.sh §7 copies this file to
+    /var/ossec/etc/rules/, validates it with `wazuh-analysisd -t` and restarts
+    the manager only if it compiles. It also installs wazuh_rules/agent.conf,
+    which the Sysmon, FIM and victim-side rules (100023, 100031) depend on.
+
+  Every <if_sid> parent is a stock Wazuh 4.8.2 rule, checked against the
+  v4.8.2 ruleset source (tests/test_mitm_rules.py pins the list).
+
+  DESCRIPTIONS: "Insight Shield: <what happened> — <facts>". The level sets
+  severity, so no "CRITICAL —" prefix. Facts come from short $(fields); at most
+  one path per rule, never a command line. FIM rules name no file: they fire
+  once per file, and the translation cache is keyed on the description, so a
+  per-file description would buy one AI call per encrypted file. The path is
+  in the alert's attack trail.
+
   RULE LEVEL MAPPING TO INSIGHT SHIELD SEVERITY TIERS:
     Level  2-4  → Informational
     Level  5-7  → Low
@@ -25,55 +35,62 @@
        Windows Events: 4625 (failed login), 4672 (admin logon), 4720 (new account)
        ═══════════════════════════════════════════════════════ -->
 
-  <!-- Multiple failed logins on POS terminal — brute force attempt -->
+  <!-- Multiple failed logins on POS terminal — brute force attempt.
+       No no_log: it kept the alert out of alerts.json, so the integrator
+       never saw it and the dashboard never showed a brute force. -->
   <rule id="100001" level="10" frequency="6" timeframe="120">
     <if_matched_sid>60122</if_matched_sid>
     <field name="win.system.eventID">^4625$</field>
-    <description>Insight Shield: Multiple failed login attempts on POS terminal — possible brute force attack</description>
+    <description>Insight Shield: Repeated failed logins, possible brute force — from $(win.eventdata.ipAddress)</description>
     <group>insightshield_unauthorized,authentication_failed,</group>
-    <options>no_log</options>
   </rule>
 
   <!-- Privileged account logon outside business hours (before 8AM or after 9PM) -->
+  <!-- SYSTEM / LOCAL SERVICE / NETWORK SERVICE get a 4672 on every service
+       start; without the negate this fires all night. -->
   <rule id="100002" level="10">
-    <if_sid>60204</if_sid>
+    <if_sid>60103</if_sid>
     <field name="win.system.eventID">^4672$</field>
+    <field name="win.eventdata.subjectUserSid" type="pcre2" negate="yes">^S-1-5-(18|19|20)$</field>
     <time>21:00 - 08:00</time>
-    <description>Insight Shield: Privileged account logged in outside business hours — unauthorized access suspected</description>
+    <description>Insight Shield: Admin login outside business hours — account $(win.eventdata.subjectUserName)</description>
     <group>insightshield_unauthorized,authentication_success,after_hours,</group>
   </rule>
 
   <!-- New user account created unexpectedly -->
   <rule id="100003" level="12">
-    <if_sid>60137</if_sid>
+    <if_sid>60109</if_sid>
     <field name="win.system.eventID">^4720$</field>
-    <description>Insight Shield: New user account created on branch endpoint — unauthorized change suspected</description>
+    <description>Insight Shield: New user account created — $(win.eventdata.targetUserName), by $(win.eventdata.subjectUserName)</description>
     <group>insightshield_unauthorized,account_management,</group>
   </rule>
 
   <!-- Account added to privileged group (Administrators) -->
   <rule id="100004" level="12">
-    <if_sid>60156</if_sid>
+    <if_sid>60154</if_sid>
     <field name="win.system.eventID">^4732$</field>
-    <description>Insight Shield: Account added to a privileged group — unauthorized privilege escalation suspected</description>
+    <description>Insight Shield: Account added to the Administrators group — by $(win.eventdata.subjectUserName)</description>
     <group>insightshield_unauthorized,account_management,privilege_escalation,</group>
   </rule>
 
   <!-- ═══════════════════════════════════════════════════════
        CATEGORY 2 — POS MALWARE / RAM SCRAPING
        Primary: Process injection into POS, FIM on POS dirs, new service install
-       Requires: Microsoft Sysmon installed with SwiftOnSecurity config
-       Sysmon Event 10 = ProcessAccess (required for RAM scraping detection)
+       Requires: Microsoft Sysmon with ProcessAccess (Event 10) logged for the
+                 POS and lsass.exe images, and the Sysmon channel collected
+                 (wazuh_rules/agent.conf).
        Windows Events: 4688 (new process), 7045 (new service), 4663 (file access)
        ═══════════════════════════════════════════════════════ -->
 
-  <!-- Sysmon: Process accessing POS terminal memory — RAM scraping indicator -->
+  <!-- Sysmon: Process accessing POS terminal memory — RAM scraping indicator.
+       No MITRE tag: none exists for POS RAM scraping, and a guessed one is
+       worse than none. -->
   <rule id="100010" level="15">
-    <if_sid>87701</if_sid>
+    <if_sid>61612</if_sid>
     <field name="win.system.channel">Microsoft-Windows-Sysmon/Operational</field>
     <field name="win.system.eventID">^10$</field>
     <field name="win.eventdata.targetImage" type="pcre2">pos_terminal|cashier|payment|pos\.exe</field>
-    <description>Insight Shield: CRITICAL — Process accessing POS terminal memory. RAM scraping attack suspected.</description>
+    <description>Insight Shield: Another program read the POS program's memory, card data theft suspected — $(win.eventdata.sourceImage)</description>
     <group>insightshield_pos_malware,ram_scraping,critical,</group>
   </rule>
 
@@ -81,7 +98,7 @@
   <rule id="100011" level="13">
     <if_sid>554,550</if_sid>
     <field name="file" type="pcre2">C:\\POS|C:\\cashier|C:\\payment</field>
-    <description>Insight Shield: Unauthorized file change detected in POS application directory — malware suspected</description>
+    <description>Insight Shield: POS program files changed — malware suspected</description>
     <group>insightshield_pos_malware,file_integrity,</group>
   </rule>
 
@@ -90,67 +107,84 @@
     <if_sid>554</if_sid>
     <field name="file" type="pcre2">\.exe$|\.dll$|\.bat$|\.ps1$</field>
     <field name="file" type="pcre2">C:\\POS|C:\\cashier|C:\\Temp</field>
-    <description>Insight Shield: CRITICAL — Executable file written to POS directory. Malware installation suspected.</description>
+    <description>Insight Shield: New program dropped into a POS folder — malware installation suspected</description>
     <group>insightshield_pos_malware,file_integrity,critical,</group>
   </rule>
 
   <!-- New Windows service installed on POS terminal -->
   <rule id="100013" level="13">
-    <if_sid>87710</if_sid>
+    <if_sid>61138</if_sid>
     <field name="win.system.eventID">^7045$</field>
-    <description>Insight Shield: Unexpected new service installed on branch endpoint — possible malware persistence</description>
+    <description>Insight Shield: New Windows service installed, possible malware persistence — $(win.eventdata.serviceName)</description>
     <group>insightshield_pos_malware,malware,</group>
   </rule>
 
   <!-- Suspicious new process created on POS terminal -->
   <rule id="100014" level="10">
-    <if_sid>87720</if_sid>
+    <if_sid>60103</if_sid>
     <field name="win.system.eventID">^4688$</field>
     <field name="win.eventdata.newProcessName" type="pcre2">\\Temp\\|\\AppData\\|cmd\.exe|powershell\.exe</field>
-    <description>Insight Shield: Suspicious process launched from non-standard location on branch endpoint</description>
+    <description>Insight Shield: Program launched from an unusual place — $(win.eventdata.newProcessName)</description>
     <group>insightshield_pos_malware,execution,</group>
   </rule>
 
   <!-- ═══════════════════════════════════════════════════════
        CATEGORY 3 — MAN-IN-THE-MIDDLE (MitM) / ARP POISONING
-       Primary: ARP reply from unexpected host, duplicate IP
-       Network Events: Processed at network layer by Wazuh
+       100020-100022: arpwatch on the Wazuh manager's LAN interface, logging to
+                 syslog. Wazuh's stock arpwatch rules (7200 group) decode it;
+                 these three escalate. Without arpwatch — or when the manager
+                 cannot see POS traffic — they never fire.
+       100023: victim side, needs no network visibility. Works on any LAN.
+       These once hung off 5402/5403/5404 — the stock SUDO rules, not ARP —
+       so every root sudo raised a CRITICAL "ARP poisoning" alert.
        ═══════════════════════════════════════════════════════ -->
 
-  <!-- ARP reply from an unexpected MAC address for a known IP -->
+  <!-- 7204 IP moved to a new MAC, 7209 possible arpspoofing -->
   <rule id="100020" level="14">
-    <if_sid>5402</if_sid>
-    <description>Insight Shield: CRITICAL — ARP reply from unexpected host. MitM attack via ARP poisoning suspected.</description>
+    <if_sid>7204,7209</if_sid>
+    <description>Insight Shield: Known network address now answers from a different device — ARP spoofing (man-in-the-middle) suspected</description>
     <group>insightshield_mitm,arp_spoofing,critical,</group>
   </rule>
 
-  <!-- Duplicate IP address detected on network segment -->
+  <!-- 7202 "flip flop": IP alternating between two MACs -->
   <rule id="100021" level="12">
-    <if_sid>5403</if_sid>
-    <description>Insight Shield: Duplicate IP address detected on branch network — possible MitM attack in progress</description>
+    <if_sid>7202</if_sid>
+    <description>Insight Shield: One network address flipping between two devices — duplicate IP, possible man-in-the-middle</description>
     <group>insightshield_mitm,arp_spoofing,</group>
   </rule>
 
-  <!-- ARP scan detected — reconnaissance phase of MitM -->
+  <!-- 7201 new host. arpwatch cannot see an ARP scan itself; a never-seen
+       device is the closest precursor it reports. -->
   <rule id="100022" level="10">
-    <if_sid>5404</if_sid>
-    <description>Insight Shield: ARP scan detected on branch network — possible attacker mapping network before MitM attempt</description>
+    <if_sid>7201</if_sid>
+    <description>Insight Shield: Never-seen device appeared on the branch network — possible attacker mapping the network</description>
     <group>insightshield_mitm,reconnaissance,</group>
+  </rule>
+
+  <!-- Gateway MAC changed on this PC. Agent command alias 'arp-gateway'
+       (wazuh_rules/agent.conf). Same shape as stock 533: 530 + the alias with
+       no closing quote (a prefix match) + check_diff. Also fires once when the
+       entry is restored. -->
+  <rule id="100023" level="12">
+    <if_sid>530</if_sid>
+    <match>ossec: output: 'arp-gateway</match>
+    <check_diff />
+    <description>Insight Shield: Gateway address on this PC now points to a different device — ARP spoofing (man-in-the-middle) suspected</description>
+    <group>insightshield_mitm,arp_spoofing,victim_side,</group>
   </rule>
 
   <!-- ═══════════════════════════════════════════════════════
        CATEGORY 4 — RANSOMWARE (MITRE T1486: Data Encrypted for Impact)
        Primary: Wazuh File Integrity Monitoring (syscheck) on POS shared folders
        Detection: mass file-modification events + rename-with-new-extension storms
-       Requires: <syscheck> block in agent ossec.conf watching C:\POS\shared
-                 with <frequency>30</frequency> or realtime mode.
+       Requires: realtime syscheck on C:\POS\shared (wazuh_rules/agent.conf).
        ═══════════════════════════════════════════════════════ -->
 
   <!-- Single FIM modification inside the POS shared folder — baseline event -->
   <rule id="100044" level="8">
     <if_sid>554,550</if_sid>
     <field name="file" type="pcre2">C:\\POS\\shared|/mnt/pos_share</field>
-    <description>Insight Shield: File modified inside POS shared folder — investigate if part of a larger pattern.</description>
+    <description>Insight Shield: File changed in the POS shared folder — watch for a larger pattern</description>
     <group>insightshield_ransomware,file_integrity,syscheck,</group>
   </rule>
 
@@ -158,7 +192,7 @@
   <rule id="100045" level="12">
     <if_sid>554,550</if_sid>
     <field name="file" type="pcre2">\.(encrypted|locked|crypt|enc|ryk|pay|wcry)$</field>
-    <description>Insight Shield: File renamed with ransomware-style extension. Possible T1486 encryption activity.</description>
+    <description>Insight Shield: File renamed with a ransomware-style extension — encryption suspected</description>
     <group>insightshield_ransomware,file_integrity,t1486,</group>
     <mitre>
       <id>T1486</id>
@@ -168,7 +202,7 @@
   <!-- Burst of FIM modifications in a short window — encryption storm -->
   <rule id="100046" level="14" frequency="20" timeframe="60">
     <if_matched_sid>100044</if_matched_sid>
-    <description>Insight Shield: CRITICAL — 20+ file modifications in 60 seconds inside POS shared folder. Ransomware encryption storm suspected.</description>
+    <description>Insight Shield: 20+ file changes in 60 seconds in the POS shared folder — ransomware encryption suspected</description>
     <group>insightshield_ransomware,file_integrity,encryption_storm,critical,</group>
     <mitre>
       <id>T1486</id>
@@ -178,7 +212,7 @@
   <!-- Sustained rename-with-new-extension pattern — confirmed ransomware -->
   <rule id="100047" level="15" frequency="10" timeframe="120">
     <if_matched_sid>100045</if_matched_sid>
-    <description>Insight Shield: CRITICAL — Sustained ransomware-style rename pattern (10+ files in 2 minutes). Isolate host immediately.</description>
+    <description>Insight Shield: 10+ ransomware-style renames in 2 minutes — encryption confirmed, isolate the PC now</description>
     <group>insightshield_ransomware,file_integrity,t1486,critical,</group>
     <mitre>
       <id>T1486</id>
@@ -186,39 +220,75 @@
   </rule>
 
   <!-- ═══════════════════════════════════════════════════════
-       CATEGORY 5 — DENIAL OF SERVICE (DoS)
-       Primary: Connection flood, service crash, high resource usage
+       CATEGORY 5 — DENIAL OF SERVICE (DoS) AND NETWORK SCANS
+       100030/100040: Suricata on the manager, eve.json read by Wazuh (stock
+                 86601 "Suricata: Alert"). The msg prefixes below are the two
+                 Insight Shield rules in Suricata's local.rules
+                 (docs/deployment-ubuntu.md) — rename one there, rename it
+                 here. Silent when the manager cannot see POS traffic.
+       100031: victim side, needs no network visibility.
        Windows Events: 7034 (service crashed), 7036 (service changed state)
        ═══════════════════════════════════════════════════════ -->
 
-  <!-- High volume of connection requests — SYN/UDP flood indicator -->
+  <!-- Suricata "InsightShield port scan" (SYNs from one source to many ports) -->
+  <rule id="100030" level="8">
+    <if_sid>86601</if_sid>
+    <field name="alert.signature">^InsightShield port scan</field>
+    <description>Insight Shield: Port scan — from $(src_ip) against $(dest_ip)</description>
+    <group>insightshield_recon,port_scan,</group>
+  </rule>
+
+  <!-- SYN flood on this PC. Agent command alias 'syn-watch' prints
+       SYN_FLOOD_SUSPECTED or ok. ONE <match> only: Wazuh joins multiple <match>
+       tags into one pattern, so the second condition must be a <regex> (as
+       stock 531 does). check_diff because the agent sends the output every
+       interval, not only on change — without it this fires every 10 s for the
+       whole flood. -->
+  <rule id="100031" level="12">
+    <if_sid>530</if_sid>
+    <match>ossec: output: 'syn-watch</match>
+    <regex>SYN_FLOOD_SUSPECTED</regex>
+    <check_diff />
+    <description>Insight Shield: Flood of half-open connections on this PC — SYN flood (denial of service) in progress</description>
+    <group>insightshield_dos,flood,victim_side,</group>
+  </rule>
+
+  <!-- Suricata "InsightShield SYN flood". Once hung off 31151, a web-log 400
+       rule, so it never saw a flood. Destination only: a flood's sources are
+       often random. -->
   <rule id="100040" level="10">
-    <if_sid>31151</if_sid>
-    <description>Insight Shield: High-volume connection flood detected. Denial of Service attack may be in progress.</description>
+    <if_sid>86601</if_sid>
+    <field name="alert.signature">^InsightShield SYN flood</field>
+    <description>Insight Shield: Flood of connection requests (SYN flood) — against $(dest_ip)</description>
     <group>insightshield_dos,flood,</group>
   </rule>
 
   <!-- Sustained flood after initial detection — escalate severity -->
   <rule id="100041" level="12" frequency="3" timeframe="60">
     <if_matched_sid>100040</if_matched_sid>
-    <description>Insight Shield: Sustained connection flood confirmed. DoS attack actively disrupting branch network.</description>
+    <description>Insight Shield: Connection flood keeps going — denial of service in progress against $(dest_ip)</description>
     <group>insightshield_dos,flood,sustained,</group>
   </rule>
 
   <!-- POS or critical service crashed — possible result of DoS -->
   <rule id="100042" level="12">
-    <if_sid>18107</if_sid>
-    <field name="win.system.eventID">^7034$</field>
-    <description>Insight Shield: Critical service crashed on branch endpoint. May be result of DoS attack or POS malware.</description>
+    <!-- 7031 is caught first by stock 61107, 7034 goes straight to 61102 -->
+    <if_sid>61102,61107</if_sid>
+    <field name="win.system.eventID">^7031$|^7034$</field>
+    <description>Insight Shield: Service crashed — $(win.eventdata.param1)</description>
     <group>insightshield_dos,insightshield_pos_malware,service_crash,</group>
   </rule>
 
-  <!-- Service stopped unexpectedly outside maintenance window -->
+  <!-- POS service stopped during business hours. 7036 fires for every service
+       start/stop, so this is scoped to POS services and to "stopped" — 100051
+       takes "running"; with identical conditions one of the two never fired. -->
   <rule id="100043" level="10">
-    <if_sid>18108</if_sid>
+    <if_sid>61100</if_sid>
     <field name="win.system.eventID">^7036$</field>
+    <field name="win.eventdata.param1" type="pcre2">(?i)pos|cashier|payment</field>
+    <field name="win.eventdata.param2">stopped</field>
     <time>08:00 - 21:00</time>
-    <description>Insight Shield: Critical service stopped unexpectedly during business hours — investigate immediately</description>
+    <description>Insight Shield: POS service stopped during business hours — $(win.eventdata.param1)</description>
     <group>insightshield_dos,service_crash,</group>
   </rule>
 
@@ -231,59 +301,66 @@
        ═══════════════════════════════════════════════════════ -->
 
   <!-- Successful interactive login during business hours — baseline cashier activity -->
+  <!-- Stock 60118 (interactive logon) and 60119 (first-time user) sit under
+       60106 with no eventID filter and match first, so hang off them too. -->
   <rule id="100050" level="3">
-    <if_sid>60106</if_sid>
+    <if_sid>60106,60118,60119</if_sid>
     <field name="win.system.eventID">^4624$</field>
     <time>08:00 - 21:00</time>
-    <description>Insight Shield (info): Successful interactive login on branch endpoint during business hours.</description>
+    <description>Insight Shield (info): Login during business hours — $(win.eventdata.targetUserName)</description>
     <group>insightshield_retail_baseline,authentication_success,business_hours,</group>
   </rule>
 
   <!-- Windows service started during business hours — baseline service activity -->
   <rule id="100051" level="3">
-    <if_sid>18108</if_sid>
+    <if_sid>61100</if_sid>
     <field name="win.system.eventID">^7036$</field>
+    <field name="win.eventdata.param2">running</field>
     <time>08:00 - 21:00</time>
-    <description>Insight Shield (info): Windows service started on branch endpoint during business hours.</description>
+    <description>Insight Shield (info): Windows service started — $(win.eventdata.param1)</description>
     <group>insightshield_retail_baseline,service_change,</group>
   </rule>
 
   <!-- Windows Update install completed — patch-management baseline -->
   <rule id="100052" level="4">
+    <if_sid>61100</if_sid>
     <field name="win.system.providerName">Microsoft-Windows-WindowsUpdateClient</field>
     <field name="win.system.eventID">^19$</field>
-    <description>Insight Shield (info): Windows Update successfully installed on branch endpoint.</description>
+    <description>Insight Shield (info): Windows Update installed</description>
     <group>insightshield_retail_baseline,system_update,</group>
   </rule>
 
   <!-- USB storage device connected (Event 6416 + USBSTOR\Disk) — authorize check -->
   <rule id="100053" level="5">
+    <if_sid>60103</if_sid>
     <field name="win.system.eventID">^6416$</field>
-    <match>USBSTOR\Disk</match>
-    <description>Insight Shield (low): USB storage device connected to branch endpoint — verify device is authorized.</description>
+    <match>USBSTOR</match>
+    <description>Insight Shield (low): USB storage device connected — verify it is authorized</description>
     <group>insightshield_retail_baseline,usb_detection,</group>
   </rule>
 
   <!-- Local account password reset by administrator -->
   <rule id="100054" level="5">
-    <if_sid>60106</if_sid>
+    <if_sid>60103</if_sid>
     <field name="win.system.eventID">^4724$</field>
-    <description>Insight Shield (low): Local account password was reset by an administrator on branch endpoint.</description>
+    <description>Insight Shield (low): Account password reset by an administrator — $(win.eventdata.targetUserName)</description>
     <group>insightshield_retail_baseline,account_management,password_change,</group>
   </rule>
 
   <!-- Scheduled task created — verify approved maintenance -->
   <rule id="100055" level="6">
+    <if_sid>60103</if_sid>
     <field name="win.system.eventID">^4698$</field>
-    <description>Insight Shield (low): Scheduled task created on branch endpoint — verify it is approved maintenance.</description>
+    <description>Insight Shield (low): Scheduled task created, verify it is approved — $(win.eventdata.taskName)</description>
     <group>insightshield_retail_baseline,scheduled_task,</group>
   </rule>
 
   <!-- Explicit credential use (e.g. RDP session start) during business hours -->
   <rule id="100056" level="6">
+    <if_sid>60103</if_sid>
     <field name="win.system.eventID">^4648$</field>
     <time>08:00 - 21:00</time>
-    <description>Insight Shield (low): Explicit credential use (e.g. RDP) during business hours on branch endpoint.</description>
+    <description>Insight Shield (low): Sign-in with explicit credentials (e.g. RDP) — $(win.eventdata.targetUserName)</description>
     <group>insightshield_retail_baseline,remote_access,</group>
   </rule>
 
