@@ -45,6 +45,15 @@ def _parents(rule):
     return [p for tag in ("if_sid", "if_matched_sid") for p in (rule.findtext(tag) or "").split(",") if p]
 
 
+def test_no_xml_declaration():
+    # Wazuh's own parser (os_xml.c) only special-cases "<!"; it reads
+    # <?xml ... ?> as an element, hits the "?" after the last attribute and
+    # refuses the whole file: "Bad attribute closing for 'encoding'".
+    for path in (RULES, os.path.join(os.path.dirname(RULES), "agent.conf")):
+        with open(path, encoding="utf-8") as f:
+            assert "<?" not in f.read(), path
+
+
 def test_rule_count():
     assert len(_rules()) == 30
 
