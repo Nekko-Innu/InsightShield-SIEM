@@ -1,4 +1,5 @@
-"""Manager Telegram: initial HIGH/CRITICAL dispatch + once-per-alert escalation.
+"""Notifications: HIGH/CRITICAL dispatch with its per-device cooldown, the
+escalation digest, the manager's once-per-alert nudge, and the email switch.
 
 Pure-logic with a throwaway DB (rate_limit is SQLite-backed). notifier sends are
 monkeypatched — no network.
@@ -71,4 +72,44 @@ def test_escalation_dedup_one_nudge_per_alert():
 def test_manager_escalation_skips_when_deactivated(monkeypatch):
     monkeypatch.setattr(notifier, "_service_is_active", lambda svc: False)
     # No raise, returns False, and never reaches _post_telegram.
-    assert notifier.send_manager_escalation({"id": 9, "attack_type": "t", "device_name": "d"}) is False
+    assert notifier.send_manager_escalation([{"id": 9, "attack_type": "t", "device_name": "d"}]) is False
+
+
+def test_repeat_alert_on_same_device_notifies_once(monkeypatch):
+    # An ARP spoof stored ~60 CRITICAL rows in 30 s; each sent three messages.
+    calls = _spy(monkeypatch)
+    alert = {"rule_id": "100020", "severity": "CRITICAL", "attack_type": "t"}
+    for i in range(5):
+        alert_router.route_alert("CRITICAL", {**alert, "id": i, "device_name": "pos2"})
+    assert calls == {"it": 1, "email": 1, "manager": 1}
+    # Same attack on another machine is a new incident.
+    alert_router.route_alert("CRITICAL", {**alert, "id": 9, "device_name": "pos1"})
+    assert calls["it"] == 2
+
+
+def test_escalation_sweep_sends_one_digest_not_one_per_alert(monkeypatch):
+    import scheduler
+    sent = []
+    monkeypatch.setattr(db, "get_unacked_critical_alerts", lambda **k: [
+        {"id": i, "attack_type": "ARP spoofing", "device_name": "pos2"} for i in range(1, 61)
+    ] + [{"id": 70, "attack_type": "Port scan", "device_name": "pos1"}])
+    monkeypatch.setattr(notifier, "_post_telegram", lambda tok, chat, text, **k: sent.append(text) or True)
+    monkeypatch.setattr(notifier, "_service_is_active", lambda svc: True)
+
+    scheduler._escalation_sweep()
+    it, manager = sent
+    assert it.startswith("[Insight Shield] 61 CRITICAL")
+    assert "60 × ARP spoofing on pos2 (#1–#60)" in it and "Port scan on pos1 (#70)" in it
+    assert "61 CRITICAL" in manager
+
+    # Next sweep: IT is reminded again, the manager is not (once per alert).
+    sent.clear()
+    scheduler._escalation_sweep()
+    assert len(sent) == 1 and sent[0].startswith("[Insight Shield] 61 CRITICAL")
+
+
+def test_email_off_never_opens_smtp(monkeypatch):
+    import smtplib
+    monkeypatch.setattr(config, "EMAIL_ENABLED", False)
+    monkeypatch.setattr(smtplib, "SMTP", lambda *a, **k: (_ for _ in ()).throw(AssertionError("SMTP opened")))
+    assert notifier.send_email({"id": 1}) is False

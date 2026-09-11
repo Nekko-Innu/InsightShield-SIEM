@@ -341,25 +341,30 @@ def _escalation_sweep() -> None:
         return
 
     logger.warning("ESCALATION: %d unacknowledged CRITICAL alert(s)", len(alerts))
-    for alert in alerts:
+    # One IT digest per sweep, not a message per alert: a 60-row burst used to
+    # send 120 every 5 minutes for 24 hours.
+    #
+    # The manager hears about each alert ONCE over its lifetime (the channel is
+    # low-noise by design — not the per-sweep repeat IT gets): limit_per_min=1
+    # over the whole escalation window means only the first sweep to see an
+    # alert admits it. This sweep's newcomers go out together as one message.
+    newly_overdue = [
+        a for a in alerts
+        if rate_limit.can_call(
+            f"mgr-escal:{a.get('id')}", limit_per_min=1,
+            window_seconds=config.ESCALATION_MAX_AGE_H * 3600,
+        )[0]
+    ]
+    for send, batch in ((notifier.send_escalation_digest, alerts),
+                        (notifier.send_manager_escalation, newly_overdue)):
         try:
-            notifier.send_telegram(alert)
-            notifier.send_email(alert)
-            # Nudge the manager ONCE per alert (the manager channel is low-noise
-            # by design — not the per-sweep repeat IT gets). limit_per_min=1 over
-            # the whole escalation lifetime means the first sweep to see this
-            # unacked CRITICAL notifies the manager; later sweeps are denied.
-            allowed, _ = rate_limit.can_call(
-                f"mgr-escal:{alert.get('id')}", limit_per_min=1,
-                window_seconds=config.ESCALATION_MAX_AGE_H * 3600,
-            )
-            if allowed:
-                notifier.send_manager_escalation(alert)
+            send(batch)
         except Exception as e:
-            # One bad alert must not abandon the rest of the sweep. The
-            # EVENT_JOB_ERROR listener only sees an exception that escapes the
-            # whole job, so record this one here.
-            logger.error("Escalation failed for alert_id=%s: %s", alert.get("id"), e)
+            # A failed IT page must not cost the manager nudge, or vice versa.
+            # The EVENT_JOB_ERROR listener only sees an exception that escapes
+            # the whole job, so record this one here.
+            logger.error("Escalation %s failed (%d alerts): %s",
+                         send.__name__, len(batch), e)
             import traceback as _tb
             db.log_error(
                 source="scheduler", module="scheduler._escalation_sweep",

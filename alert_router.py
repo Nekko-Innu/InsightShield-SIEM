@@ -110,12 +110,13 @@ def route_alert(severity: str, alert: dict) -> None:
     """
     Apply after-hours escalation, then route to notification channels.
 
-    Channel matrix (after 2026-04-23 scope change):
+    Channel matrix:
       INFO/LOW   → dashboard only
       MEDIUM     → IT Telegram only (suppressed if same rule_id within 10 min)
-      HIGH       → IT SMS (rate-limited 1/5min/device) + IT Telegram + IT Email
-                   + Manager Telegram
-      CRITICAL   → same as HIGH + 5-minute escalation scheduler
+      HIGH       → IT Telegram + Manager Telegram (+ IT Email if EMAIL_ENABLED),
+                   once per rule + device per NOTIFY_COOLDOWN_MIN
+      CRITICAL   → same as HIGH + the 5-minute escalation sweep, which pages
+                   every unacknowledged CRITICAL — cooled-down ones included
 
     Parameters
     ----------
@@ -161,8 +162,22 @@ def route_alert(severity: str, alert: dict) -> None:
             )
 
     elif severity in ("HIGH", "CRITICAL"):
-        # SMS leg retired in Round J (see REBUILD_SPEC.md Part 23) — Telegram
-        # + Email are the complete active channel set for HIGH/CRITICAL.
+        # Cooldown per rule on one device. Without it an ARP spoof, which
+        # re-poisons every 2 s, sent three messages per stored row — sixty rows
+        # in thirty seconds. Keyed on the device too, so the same attack
+        # landing on a second machine still notifies. Suppressed alerts are
+        # still stored, shown, and (if CRITICAL) included in the escalation
+        # sweep's digest, so nothing is lost but the duplicate message.
+        key = f"notify:{alert.get('rule_id')}:{alert.get('device_name')}"
+        allowed, retry_after = rate_limit.can_call(
+            key, limit_per_min=1, window_seconds=config.NOTIFY_COOLDOWN_MIN * 60,
+        )
+        if not allowed:
+            logger.info(
+                "Notification suppressed (cooldown): alert_id=%s %s retry_after=%.0fs",
+                alert.get("id"), key, retry_after,
+            )
+            return
         notifier.send_telegram(alert)
         notifier.send_email(alert)
         notifier.send_manager_telegram(alert)
@@ -202,11 +217,12 @@ def escalate_one_tier(severity: str) -> str:
 
 def _channels_for(severity: str) -> str:
     """Return a human-readable string of notification channels for logging."""
+    email = "+Email" if config.EMAIL_ENABLED else ""
     channels = {
         "INFORMATIONAL": "dashboard",
         "LOW": "dashboard",
         "MEDIUM": "IT-Telegram(dedup)",
-        "HIGH": "IT-Telegram+Email+Manager-Telegram",
-        "CRITICAL": "IT-Telegram+Email+Manager-Telegram+Escalation",
+        "HIGH": f"IT-Telegram{email}+Manager-Telegram",
+        "CRITICAL": f"IT-Telegram{email}+Manager-Telegram+Escalation",
     }
     return channels.get(severity, "unknown")

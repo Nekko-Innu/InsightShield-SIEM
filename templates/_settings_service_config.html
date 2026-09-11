@@ -380,6 +380,9 @@
 ) }}
 
 {# ─────────── 4. Gmail SMTP — Round F redesign ─────────── #}
+{# Hidden while config.EMAIL_ENABLED is off: nothing sends email then, and a
+   card you can fill in for a channel that never fires is a trap. #}
+{% if email_enabled %}
 {{ service_card(
     svc_key='gmail',
     label='Gmail SMTP',
@@ -408,6 +411,7 @@
     ],
     toggle_allowed=false
 ) }}
+{% endif %}
 
 {# ─────────── 5. Wazuh API — Round F redesign ─────────── #}
 {{ service_card(
@@ -451,8 +455,8 @@
 {# ─────────── 6. Notification Recipients — Round F redesign ─────────── #}
 {# Pointers, not a service — there is no live probe to run, so the macro
    is invoked with test_allowed=false to suppress the Test button. Status
-   dot reflects whether all 3 required recipient pointers are populated
-   (manager_phone, it_admin_phone, it_admin_email). Moved to the bottom
+   dot reflects whether the required recipient pointers are populated
+   (manager_phone, it_admin_phone, plus it_admin_email while email_enabled). Moved to the bottom
    of the section list so the testable services (1-5) cluster together. #}
 {{ service_card(
     svc_key='recipients',
@@ -461,8 +465,7 @@
     summary_pairs=[
       ('Manager phone', settings_kv.get('manager_phone')),
       ('IT admin phone', settings_kv.get('it_admin_phone')),
-      ('IT admin email', settings_kv.get('it_admin_email')),
-    ],
+    ] + ([('IT admin email', settings_kv.get('it_admin_email'))] if email_enabled else []),
     fields=[
       {
         "name": "value", "label": "Manager phone", "type": "text",
@@ -480,15 +483,14 @@
         "placeholder": "+639XXXXXXXXX",
         "hint": "Contact record only — SMS channel retired Round J."
       },
-      {
+    ] + ([{
         "name": "value", "label": "IT admin email", "type": "text",
         "endpoint": url_for('admin_settings.admin_settings_set_setting', key='it_admin_email'),
         "extra": {},
         "current_value": settings_kv.get('it_admin_email') or '',
         "placeholder": "admin@yourcompany.com",
         "hint": ""
-      },
-    ],
+      }] if email_enabled else []),
     toggle_allowed=false,
     test_allowed=false
 ) }}

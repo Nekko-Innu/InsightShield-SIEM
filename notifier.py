@@ -203,34 +203,88 @@ def send_manager_resolution_notification(alert: dict,
     )
 
 
-def send_manager_escalation(alert: dict, bypass_toggle: bool = False) -> bool:
-    """
-    Notify the manager that a CRITICAL alert is still unacknowledged.
+# Telegram caps a message at 4096 characters; 20 groups stays well inside it.
+_DIGEST_MAX_LINES = 20
 
-    Fired ONCE per alert by scheduler._escalation_sweep (deduped there via the
-    rate limiter) — the manager channel is deliberately low-noise, so this is a
-    single nudge, not the per-sweep repeat IT gets. Same manager bot + chat +
-    toggle as send_manager_telegram / send_manager_resolution_notification.
-    Returns False (without raising) if deactivated or not configured.
+
+def _digest_lines(alerts: list[dict]) -> list[str]:
+    """One line per (attack, device), newest group first: "58 × ARP ... on pos2".
+
+    A burst is dozens of rows of the same attack on the same machine; listing
+    each one buried the only useful fact — which attacks, where, how many.
     """
+    groups: dict[tuple, list[int]] = {}
+    for a in alerts:
+        key = (a.get("attack_type") or "alert", a.get("device_name") or "?")
+        groups.setdefault(key, []).append(a.get("id") or 0)
+    ordered = sorted(groups.items(), key=lambda kv: max(kv[1]), reverse=True)
+    lines = [f"• {len(ids)} × {attack} on {device} (#{min(ids)}–#{max(ids)})"
+             if len(ids) > 1 else f"• {attack} on {device} (#{ids[0]})"
+             for (attack, device), ids in ordered[:_DIGEST_MAX_LINES]]
+    if len(ordered) > _DIGEST_MAX_LINES:
+        lines.append(f"• …and {len(ordered) - _DIGEST_MAX_LINES} more")
+    return lines
+
+
+def send_escalation_digest(alerts: list[dict]) -> bool:
+    """
+    Page IT once per escalation sweep with every CRITICAL still unacknowledged.
+
+    Replaces one Telegram + one email per alert per sweep. After a 60-row ARP
+    burst that was 120 messages every 5 minutes for 24 hours — past Telegram's
+    per-group limit and Gmail's daily one within the hour. Same IT bot, chat and
+    toggle as send_telegram; email only when EMAIL_ENABLED.
+    """
+    if not alerts:
+        return False
+    text = "\n".join([
+        f"[Insight Shield] {len(alerts)} CRITICAL alert(s) still UNACKNOWLEDGED",
+        *_digest_lines(alerts),
+        "Acknowledge them on the dashboard to stop these reminders.",
+    ])
+    _send_email(f"[Insight Shield] {len(alerts)} CRITICAL alert(s) unacknowledged",
+                text, label="escalation digest")
+    if not _service_is_active("telegram_it"):
+        logger.info("Telegram(IT) digest SKIPPED: service_active.telegram_it=0")
+        return False
+    return _post_telegram(
+        _request_cache.cached_api_key("telegram_it", "BOT_TOKEN"),
+        _request_cache.cached_setting("telegram_it_chat_id"),
+        text,
+        parse_mode="",  # plain text — attack labels are not HTML-escaped
+        label=f"Telegram(IT-escalation) alerts={len(alerts)}",
+    )
+
+
+def send_manager_escalation(alerts: list[dict], bypass_toggle: bool = False) -> bool:
+    """
+    Tell the manager which CRITICAL alerts have gone unacknowledged.
+
+    Each alert reaches the manager ONCE over its lifetime (scheduler dedupes
+    per alert via the rate limiter) — the manager channel is deliberately
+    low-noise, so this is a single nudge, not the per-sweep repeat IT gets.
+    The newly-overdue alerts of one sweep go out as one message. Same manager
+    bot + chat + toggle as send_manager_telegram. Returns False (without
+    raising) if deactivated or not configured.
+    """
+    if not alerts:
+        return False
     if not bypass_toggle and not _service_is_active("telegram_manager"):
         logger.info(
             "Telegram(Manager) escalation SKIPPED: service_active.telegram_manager=0 "
-            "(operator deactivated) alert_id=%s", alert.get("id"),
+            "(operator deactivated) alerts=%d", len(alerts),
         )
         return False
-    text = (
-        f"[Insight Shield] CRITICAL alert #{alert.get('id')} "
-        f"({alert.get('attack_type', 'alert')} on "
-        f"{alert.get('device_name', '?')}) "
-        f"is still UNACKNOWLEDGED — IT has been paged."
-    )
+    text = "\n".join([
+        f"[Insight Shield] {len(alerts)} CRITICAL alert(s) still UNACKNOWLEDGED — IT has been paged.",
+        *_digest_lines(alerts),
+    ])
     return _post_telegram(
         _request_cache.cached_api_key("telegram_manager", "BOT_TOKEN"),
         _request_cache.cached_setting("telegram_manager_chat_id"),
         text,
         parse_mode="",  # plain text — no HTML escaping surprises
-        label=f"Telegram(Manager-escalation) alert_id={alert.get('id')}",
+        label=f"Telegram(Manager-escalation) alerts={len(alerts)}",
     )
 
 
@@ -240,19 +294,8 @@ def send_email(alert: dict) -> bool:
     """
     Send alert notification via Gmail SMTP to IT admin.
     Uses App Password (not Gmail password).
-    Returns True if sent, False if failed or skipped.
+    Returns True if sent, False if failed or skipped (incl. EMAIL_ENABLED off).
     """
-    gmail_address = _request_cache.cached_setting("gmail_address")
-    gmail_password = _request_cache.cached_api_key("gmail", "APP_PASSWORD")
-    if not gmail_address or not gmail_password:
-        logger.warning("Email SKIPPED: gmail_address or gmail app_password not configured")
-        return False
-
-    recipient = _request_cache.cached_setting("it_admin_email")
-    if not recipient:
-        logger.warning("Email SKIPPED: it_admin_email not configured")
-        return False
-
     subject = (
         f"[Insight Shield] {alert.get('severity', 'ALERT')} — "
         f"{alert.get('attack_type', 'Security Alert')} on "
@@ -277,6 +320,25 @@ def send_email(alert: dict) -> bool:
         f"{'=' * 40}\n"
         f"Log in to the Insight Shield dashboard to acknowledge this alert.\n"
     )
+    return _send_email(subject, body, label=f"alert_id={alert.get('id')}")
+
+
+def _send_email(subject: str, body: str, label: str) -> bool:
+    """SMTP leg shared by send_email and send_escalation_digest. Never raises."""
+    if not config.EMAIL_ENABLED:
+        logger.debug("Email SKIPPED: EMAIL_ENABLED is off (%s)", label)
+        return False
+
+    gmail_address = _request_cache.cached_setting("gmail_address")
+    gmail_password = _request_cache.cached_api_key("gmail", "APP_PASSWORD")
+    if not gmail_address or not gmail_password:
+        logger.warning("Email SKIPPED: gmail_address or gmail app_password not configured")
+        return False
+
+    recipient = _request_cache.cached_setting("it_admin_email")
+    if not recipient:
+        logger.warning("Email SKIPPED: it_admin_email not configured")
+        return False
 
     msg = MIMEMultipart()
     msg["From"] = gmail_address
@@ -296,7 +358,7 @@ def send_email(alert: dict) -> bool:
             server.login(gmail_address, gmail_password)
             server.sendmail(gmail_address, recipient, msg.as_string())
 
-        logger.info("Email sent to %s for alert_id=%s", recipient, alert.get("id"))
+        logger.info("Email sent to %s (%s)", recipient, label)
         return True
 
     except Exception as e:

@@ -36,6 +36,12 @@ TELEGRAM_MANAGER_BOT_TOKEN = os.environ.get("TELEGRAM_MANAGER_BOT_TOKEN", "")
 TELEGRAM_MANAGER_CHAT_ID   = os.environ.get("TELEGRAM_MANAGER_CHAT_ID", "")
 GMAIL_ADDRESS       = os.environ.get("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
+# Email channel kill switch. OFF by default: one ARP-spoof burst stored ~60
+# CRITICAL rows, each emailed at ingest and again on every 5-minute escalation
+# sweep, which exhausts a Gmail account's daily send limit in under an hour.
+# Off also hides the Gmail card and the IT-admin-email field in Settings.
+# EMAIL_ENABLED=1 in .env restores both; the stored credentials are untouched.
+EMAIL_ENABLED = os.environ.get("EMAIL_ENABLED", "").lower() in ("1", "true", "yes")
 # Contact-record fields only (SMS channel retired Round J) — no longer read
 # by any dispatch path; kept for the Notification Recipients settings card.
 MANAGER_PHONE       = os.environ.get("MANAGER_PHONE",  "")
@@ -388,6 +394,10 @@ ESCALATION_INTERVAL_MIN = 5       # Critical alert repeat interval until ACK
 # quietly ended it. Driven from the database it would page IT forever, which is
 # how a real alerting system trains people to ignore it.
 ESCALATION_MAX_AGE_H = 24
+# HIGH/CRITICAL notifications per (rule, device). An attack that repeats — an
+# ARP spoof re-poisons every 2 s — is one incident, not sixty; the first alert
+# notifies, the rest land on the dashboard only until the window passes.
+NOTIFY_COOLDOWN_MIN = 10
 
 # ── Session ──────────────────────────────────────────────────────────────────
 # Flask session timeout in minutes — idle time, refreshed by real user requests

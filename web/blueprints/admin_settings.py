@@ -115,6 +115,7 @@ def admin_settings():
         settings_kv=settings_kv,
         service_status=service_status,
         service_active=service_active,
+        email_enabled=config.EMAIL_ENABLED,
         provider_templates=config.PROVIDER_TEMPLATES,
         provider_templates_json=_json.dumps(config.PROVIDER_TEMPLATES),
         # Audit Log tab data — audit.html partial expects these names

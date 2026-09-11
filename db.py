@@ -1713,13 +1713,15 @@ def get_service_completeness() -> dict[str, str]:
         else "offline"
     )
     # Notification Recipients — pointers, not a service. No live probe makes
-    # sense (you can't "test" a phone number). Status reflects whether all 3
+    # sense (you can't "test" a phone number). Status reflects whether the
     # required pointers are populated; the recipients card uses test_allowed=False
-    # so the macro suppresses the Test button.
+    # so the macro suppresses the Test button. The email pointer is required only
+    # while EMAIL_ENABLED — the card hides that field when it is off, and a dot
+    # stuck on "offline" for a field you cannot see is unfixable.
     out["recipients"] = (
         "online" if _has(get_setting("manager_phone"))
                     and _has(get_setting("it_admin_phone"))
-                    and _has(get_setting("it_admin_email"))
+                    and (not config.EMAIL_ENABLED or _has(get_setting("it_admin_email")))
         else "offline"
     )
     return out
