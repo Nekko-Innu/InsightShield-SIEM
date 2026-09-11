@@ -118,6 +118,21 @@ def test_suspicious_program_rule_ignores_the_agents_own_commands():
                 r"C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe"):
         assert not pattern.search(own), own
     assert pattern.search(r"C:\\Users\\cashier\\AppData\\Local\\Temp\\mimikatz.exe")
+    # OneDrive lives in AppData and raised a HIGH on every sync.
+    negated = [re.compile(f.text) for f in rule.iter("field")
+               if f.get("name") == "win.eventdata.newProcessName" and f.get("negate") == "yes"]
+    for onedrive in (r"C:\\Users\\cashier\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe",
+                     r"C:\Users\cashier\AppData\Local\Microsoft\OneDrive\OneDrive.exe"):
+        assert pattern.search(onedrive) and any(n.search(onedrive) for n in negated), onedrive
+    assert not any(n.search(r"C:\\Users\\cashier\\AppData\\Local\\Temp\\mimikatz.exe") for n in negated)
+
+
+def test_time_windows_are_written_in_utc():
+    # The manager's clock is UTC; PHT windows fired 8 hours off.
+    windows = {r.get("id"): r.findtext("time") for r in _rules() if r.findtext("time")}
+    assert windows == {"100002": "13:00 - 00:00", "100043": "00:00 - 13:00",
+                       "100050": "00:00 - 13:00", "100051": "00:00 - 13:00",
+                       "100056": "00:00 - 13:00"}
 
 
 def test_every_rule_in_the_file_has_a_label_that_fits():

@@ -18,6 +18,12 @@
   per-file description would buy one AI call per encrypted file. The path is
   in the alert's attack trail.
 
+  <time> WINDOWS are read on the manager's own clock, and the manager runs on
+  UTC (its alerts are stamped +0000). Every window below is PHT minus 8 h:
+  business hours 08:00-21:00 PHT = 00:00-13:00 UTC. Written in PHT they fired
+  8 hours off — "after hours" landed on 05:00-16:00 PHT. If the manager is
+  ever moved to Asia/Manila time, convert these back.
+
   RULE LEVEL MAPPING TO INSIGHT SHIELD SEVERITY TIERS:
     Level  2-4  → Informational
     Level  5-7  → Low
@@ -44,14 +50,15 @@
     <group>insightshield_unauthorized,authentication_failed,</group>
   </rule>
 
-  <!-- Privileged account logon outside business hours (before 8AM or after 9PM) -->
+  <!-- Privileged account logon outside business hours (before 8AM or after 9PM
+       PHT; 13:00-00:00 UTC, see the header) -->
   <!-- SYSTEM / LOCAL SERVICE / NETWORK SERVICE get a 4672 on every service
        start; without the negate this fires all night. -->
   <rule id="100002" level="10">
     <if_sid>60103</if_sid>
     <field name="win.system.eventID">^4672$</field>
     <field name="win.eventdata.subjectUserSid" type="pcre2" negate="yes">^S-1-5-(18|19|20)$</field>
-    <time>21:00 - 08:00</time>
+    <time>13:00 - 00:00</time>
     <description>Insight Shield: Admin login outside business hours — account $(win.eventdata.subjectUserName)</description>
     <group>insightshield_unauthorized,authentication_success,after_hours,</group>
   </rule>
@@ -121,11 +128,16 @@
   <!-- Suspicious new process created on POS terminal. Path only: matching
        cmd.exe/powershell.exe anywhere fired every 10 s on the agent's own
        command monitors (agent.conf runs them through SysWOW64\cmd.exe), and
-       on every admin script. psexec-style remote execution is 100013. -->
+       on every admin script. psexec-style remote execution is 100013.
+       OneDrive is excluded: it installs and updates itself under
+       AppData\Local\Microsoft\OneDrive, so every sync raised a HIGH. \\+ not
+       \\: eventchannel fields can carry the path with doubled backslashes,
+       and a single-backslash pattern then never matches. -->
   <rule id="100014" level="10">
     <if_sid>60103</if_sid>
     <field name="win.system.eventID">^4688$</field>
     <field name="win.eventdata.newProcessName" type="pcre2">\\Temp\\|\\AppData\\</field>
+    <field name="win.eventdata.newProcessName" negate="yes" type="pcre2">Microsoft\\+OneDrive</field>
     <description>Insight Shield: Program launched from an unusual place — $(win.eventdata.newProcessName)</description>
     <group>insightshield_pos_malware,execution,</group>
   </rule>
@@ -331,7 +343,7 @@
     <field name="win.system.eventID">^7036$</field>
     <field name="win.eventdata.param1" type="pcre2">(?i)pos|cashier|payment</field>
     <field name="win.eventdata.param2">stopped</field>
-    <time>08:00 - 21:00</time>
+    <time>00:00 - 13:00</time>
     <description>Insight Shield: POS service stopped during business hours — $(win.eventdata.param1)</description>
     <group>insightshield_dos,service_crash,</group>
   </rule>
@@ -350,7 +362,7 @@
   <rule id="100050" level="3">
     <if_sid>60106,60118,60119</if_sid>
     <field name="win.system.eventID">^4624$</field>
-    <time>08:00 - 21:00</time>
+    <time>00:00 - 13:00</time>
     <description>Insight Shield (info): Login during business hours — $(win.eventdata.targetUserName)</description>
     <group>insightshield_retail_baseline,authentication_success,business_hours,</group>
   </rule>
@@ -360,7 +372,7 @@
     <if_sid>61100</if_sid>
     <field name="win.system.eventID">^7036$</field>
     <field name="win.eventdata.param2">running</field>
-    <time>08:00 - 21:00</time>
+    <time>00:00 - 13:00</time>
     <description>Insight Shield (info): Windows service started — $(win.eventdata.param1)</description>
     <group>insightshield_retail_baseline,service_change,</group>
   </rule>
@@ -403,7 +415,7 @@
   <rule id="100056" level="6">
     <if_sid>60103</if_sid>
     <field name="win.system.eventID">^4648$</field>
-    <time>08:00 - 21:00</time>
+    <time>00:00 - 13:00</time>
     <description>Insight Shield (low): Sign-in with explicit credentials (e.g. RDP) — $(win.eventdata.targetUserName)</description>
     <group>insightshield_retail_baseline,remote_access,</group>
   </rule>
