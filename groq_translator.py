@@ -106,6 +106,7 @@ RULE_TO_TEMPLATE = {
     "60122": "rdp_bruteforce", "60204": "rdp_bruteforce", "100001": "rdp_bruteforce",
     "100031": "syn_flood", "100040": "syn_flood", "100041": "syn_flood",
     "100020": "arp_mitm", "100021": "arp_mitm", "100022": "arp_mitm", "100023": "arp_mitm",
+    "7202": "arp_mitm", "7204": "arp_mitm", "7209": "arp_mitm",
 }
 
 

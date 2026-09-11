@@ -604,6 +604,11 @@ ATTACK_LABELS = {
     "100054": "Baseline: password reset",
     "100055": "Baseline: scheduled task",
     "100056": "Baseline: explicit credentials",
+    # Stock arpwatch parents, overwritten to level 3 in custom_retail_rules.xml:
+    # they only surface as repeats inside 100020/100021's ignore window.
+    "7202": "ARP flip-flop repeat (already alerted) · Spoofing",
+    "7204": "ARP address change repeat (already alerted) · Spoofing",
+    "7209": "ARP mismatch repeat (already alerted) · Spoofing",
     "60122": "Failed login · Spoofing",
     "60204": "Repeated failed logins · Spoofing",
     "92900": "Credential dumping (LSASS) · Information disclosure",

@@ -141,15 +141,23 @@
        so every root sudo raised a CRITICAL "ARP poisoning" alert.
        ═══════════════════════════════════════════════════════ -->
 
-  <!-- 7204 IP moved to a new MAC, 7209 possible arpspoofing -->
-  <rule id="100020" level="14">
+  <!-- 7204 IP moved to a new MAC, 7209 possible arpspoofing.
+       ignore="600": once per 10 minutes, not once per packet. arpspoof
+       re-poisons every 2 s and arpwatch logs each reply, so one 30-second
+       spoof stored ~60 CRITICAL rows. For 10 minutes after firing, Wazuh
+       reports the event under the parent instead (7204/7209, overwritten
+       below to informational). A second attack inside that window is
+       recorded, not re-alerted. -->
+  <rule id="100020" level="14" ignore="600">
     <if_sid>7204,7209</if_sid>
     <description>Insight Shield: Known network address now answers from a different device — ARP spoofing (man-in-the-middle) suspected</description>
     <group>insightshield_mitm,arp_spoofing,critical,</group>
   </rule>
 
-  <!-- 7202 "flip flop": IP alternating between two MACs -->
-  <rule id="100021" level="12">
+  <!-- 7202 "flip flop": IP alternating between two MACs. A live spoof
+       alternates the real and the forged MAC, so this floods exactly like
+       100020 — same ignore window, same informational parent below. -->
+  <rule id="100021" level="12" ignore="600">
     <if_sid>7202</if_sid>
     <description>Insight Shield: One network address flipping between two devices — duplicate IP, possible man-in-the-middle</description>
     <group>insightshield_mitm,arp_spoofing,</group>
@@ -173,6 +181,40 @@
     <check_diff />
     <description>Insight Shield: Gateway address on this PC now points to a different device — ARP spoofing (man-in-the-middle) suspected</description>
     <group>insightshield_mitm,arp_spoofing,victim_side,</group>
+  </rule>
+
+  <!-- The stock arpwatch parents, lowered to level 3 (Informational). They only
+       surface while 100020/100021 sit in their ignore window: those rules have
+       no conditions of their own, so outside the window they claim every such
+       event. Inside it, stock levels were 7204/7202 = 9 (MEDIUM — sent as HIGH
+       after hours, -5 health score each) and 7209 = 7. At level 3 the repeats
+       stay as evidence — stored, auto-closed, no notification, no score cost.
+       Copied from stock v4.8.2 0115-arpwatch_rules.xml; only level and
+       description differ. overwrite keeps the original if_sid regardless, and
+       the stock groups are restated because this file's wrapper group would
+       otherwise stand in for syslog,arpwatch. -->
+  <rule id="7202" level="3" overwrite="yes">
+    <if_sid>7200</if_sid>
+    <match>flip flop </match>
+    <description>Arpwatch: "flip flop" repeated while ARP spoofing is already alerted (100021)</description>
+    <group>syslog,arpwatch,ip_spoof,pci_dss_1.3.4,pci_dss_11.4,gdpr_IV_35.7.d,hipaa_164.312.a.1,nist_800_53_CA.3,nist_800_53_SI.4,tsc_CC6.6,tsc_CC6.7,tsc_CC6.8,tsc_CC7.1,tsc_CC6.1,tsc_CC7.2,tsc_CC7.3,</group>
+  </rule>
+
+  <rule id="7204" level="3" overwrite="yes">
+    <if_sid>7200</if_sid>
+    <match>changed ethernet address </match>
+    <description>Arpwatch: address change repeated while ARP spoofing is already alerted (100020)</description>
+    <group>syslog,arpwatch,ip_spoof,pci_dss_1.3.4,pci_dss_11.4,gdpr_IV_35.7.d,hipaa_164.312.a.1,nist_800_53_CA.3,nist_800_53_SI.4,tsc_CC6.6,tsc_CC6.7,tsc_CC6.8,tsc_CC7.1,tsc_CC6.1,tsc_CC7.2,tsc_CC7.3,</group>
+  </rule>
+
+  <rule id="7209" level="3" overwrite="yes">
+    <if_sid>7200</if_sid>
+    <match>ethernet mismatch</match>
+    <description>Arpwatch: ethernet mismatch repeated while ARP spoofing is already alerted (100020)</description>
+    <mitre>
+      <id>T1095</id>
+    </mitre>
+    <group>syslog,arpwatch,ip_spoof,pci_dss_1.3.4,pci_dss_11.4,gdpr_IV_35.7.d,hipaa_164.312.a.1,nist_800_53_CA.3,nist_800_53_SI.4,tsc_CC6.6,tsc_CC6.7,tsc_CC6.8,tsc_CC7.1,tsc_CC6.1,tsc_CC7.2,tsc_CC7.3,</group>
   </rule>
 
   <!-- ═══════════════════════════════════════════════════════

@@ -30,7 +30,7 @@ MITM = ("100020", "100021", "100022", "100023")
 # the bug: 5402 is sudo, 87701 pfSense, 31151 a web 400, 87710 doesn't exist.
 STOCK_PARENTS = {
     "530", "550", "554",                    # command output, FIM changed/added
-    "7201", "7202", "7204", "7209",         # arpwatch
+    "7200", "7201", "7202", "7204", "7209",  # arpwatch (7200: group, overwrites)
     "60103", "60106", "60109", "60118", "60119", "60122", "60154",  # Windows security
     "61100", "61102", "61107", "61138", "61612",                    # Windows system, Sysmon 10
     "86601",                                # Suricata alert
@@ -55,13 +55,30 @@ def test_no_xml_declaration():
 
 
 def test_rule_count():
-    assert len(_rules()) == 30
+    assert len(_rules()) == 33
 
 
 def test_mitm_rules_hang_off_arpwatch_not_sudo():
     parents = {r.get("id"): r.findtext("if_sid") for r in _rules()}
     assert {rid: parents[rid] for rid in MITM} == {
         "100020": "7204,7209", "100021": "7202", "100022": "7201", "100023": "530"}
+
+
+def test_arp_spoof_alerts_once_per_window_and_repeats_are_informational():
+    # Live 2026-09-11: one 30 s arpspoof stored ~60 CRITICAL 100020 rows, each
+    # paged by Telegram and email. ignore= silences the rule after it fires, and
+    # Wazuh then reports the event under the stock parent — which at stock level
+    # 9 is MEDIUM (HIGH after hours). Level 3 is Informational: no page, no score.
+    rules = {r.get("id"): r for r in _rules()}
+    for rid in ("100020", "100021"):
+        assert int(rules[rid].get("ignore", 0)) >= 300, rid
+    for rid, match in (("7202", "flip flop "), ("7204", "changed ethernet address "),
+                       ("7209", "ethernet mismatch")):
+        r = rules[rid]
+        assert r.get("overwrite") == "yes" and int(r.get("level")) <= 4, rid
+        assert r.findtext("match") == match, rid  # verbatim from stock v4.8.2
+        assert r.findtext("if_sid") == "7200", rid
+        assert "arpwatch" in r.findtext("group"), rid
 
 
 def test_every_parent_is_verified_stock_or_custom():
@@ -103,7 +120,7 @@ def test_suspicious_program_rule_ignores_the_agents_own_commands():
     assert pattern.search(r"C:\\Users\\cashier\\AppData\\Local\\Temp\\mimikatz.exe")
 
 
-def test_every_custom_rule_has_a_label_that_fits():
+def test_every_rule_in_the_file_has_a_label_that_fits():
     for r in _rules():
         label = wazuh_receiver._infer_attack_type(r.get("id"))
         assert label != "Unknown", r.get("id")
