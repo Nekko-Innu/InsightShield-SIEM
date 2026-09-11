@@ -224,11 +224,20 @@ install -m 644 "$APP/logrotate/insightshield" /etc/logrotate.d/insightshield \
 if [ "$HAVE_WAZUH" = 1 ]; then
   # install(1) sets mode and ownership in the same call. Compare first: new
   # rules only load on a manager restart, and WAZUH_CHANGED is what asks for one.
-  if cmp -s "$APP/wazuh_rules/custom_retail_rules.xml" /var/ossec/etc/rules/custom_retail_rules.xml; then
+  #
+  # The old copy is kept aside until the ruleset compiles. A file that fails
+  # `wazuh-analysisd -t` left in place does not hurt the running manager, but
+  # the next restart or reboot loads it and the manager does not come back.
+  RULES=/var/ossec/etc/rules/custom_retail_rules.xml
+  RULES_PREV=""
+  RULES_INSTALLED=0
+  if cmp -s "$APP/wazuh_rules/custom_retail_rules.xml" "$RULES"; then
     pass "wazuh: custom_retail_rules.xml already current"
-  elif install -o root -g wazuh -m 660 "$APP/wazuh_rules/custom_retail_rules.xml" \
+  elif { [ ! -f "$RULES" ] || { RULES_PREV="$(mktemp)" && cp -p "$RULES" "$RULES_PREV"; }; } \
+       && install -o root -g wazuh -m 660 "$APP/wazuh_rules/custom_retail_rules.xml" \
          /var/ossec/etc/rules/; then
     WAZUH_CHANGED=1
+    RULES_INSTALLED=1
     pass "wazuh: custom_retail_rules.xml installed"
   else
     fail "wazuh: could not install rules"
@@ -310,13 +319,19 @@ EOF
   RULESET_OK=0
   if [ ! -x /var/ossec/bin/wazuh-analysisd ]; then
     warn "wazuh: wazuh-analysisd not found — ruleset not validated, skipping restart"
-  elif /var/ossec/bin/wazuh-analysisd -t >/dev/null 2>&1; then
+  elif RULESET_ERR="$(/var/ossec/bin/wazuh-analysisd -t 2>&1)"; then
     RULESET_OK=1
     pass "wazuh: ruleset compiles (wazuh-analysisd -t)"
   else
     fail "wazuh: ruleset failed to compile — manager NOT restarted, it keeps serving the previous ruleset"
-    fail "      run '/var/ossec/bin/wazuh-analysisd -t' for the error"
+    fail "      $(printf '%s\n' "$RULESET_ERR" | grep -m1 -E 'ERROR|CRITICAL')"
+    if [ "$RULES_INSTALLED" = 1 ] && [ -n "$RULES_PREV" ]; then
+      cp -p "$RULES_PREV" "$RULES" && fail "      previous custom_retail_rules.xml put back — safe to restart"
+    elif [ "$RULES_INSTALLED" = 1 ]; then
+      rm -f "$RULES" && fail "      new custom_retail_rules.xml removed (no previous copy) — safe to restart"
+    fi
   fi
+  [ -n "$RULES_PREV" ] && rm -f "$RULES_PREV"
 
   if [ "$WAZUH_CHANGED" = 0 ]; then
     pass "wazuh: no config change, manager left running"
