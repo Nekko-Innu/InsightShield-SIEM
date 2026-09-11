@@ -48,13 +48,16 @@
 {% set _freq_threshold = _rule.get('frequency') if _rule is mapping else None %}
 {% set _firedtimes = _rule.get('firedtimes') if _rule is mapping else None %}
 {% set _show_freq_badge = sev == 'medium' and _freq_threshold and _firedtimes %}
-{# Description-cell tooltip: the Wazuh rule description (from attack_trail.rule)
+{# Description-cell tooltip: the full attack_type (the cell itself truncates),
+   then the Wazuh rule description (from attack_trail.rule) when it differs,
    stacked above the AI/static plain-language summary. The {% set %}…{% endset %}
    capture keeps the blank line as a real newline, which the native title
    attribute renders as a line break. Falls back to just the summary when the
    rule carried no description. #}
 {% set _rule_desc = _rule.get('description') if _rule is mapping else None %}
-{% set _tip %}{% if _rule_desc %}{{ _rule_desc }}
+{% set _tip %}{{ a.attack_type|default('Alert') }}
+
+{% if _rule_desc and _rule_desc != a.attack_type %}{{ _rule_desc }}
 
 {% endif %}{{ a.plain_text|default('—') }}{% endset %}
 <tr class="sev-accent-{{ cls }} hover:bg-surface-50 cursor-pointer"

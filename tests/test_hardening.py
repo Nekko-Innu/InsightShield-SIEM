@@ -721,7 +721,10 @@ def test_webhook_payload_validation_bounds_the_unbounded_fields():
 
     # Free-text fields are capped like device_name already was.
     assert validate_payload(dict(base, attack_type="A" * 100)) is not None
-    assert validate_payload(dict(base, description="D" * 1000)) is not None
+    # description is cut, not refused: Wazuh fills it from event fields, and a
+    # deep path must not bounce a real attack's alert.
+    long_desc = dict(base, description="D" * 1000)
+    assert validate_payload(long_desc) is None and len(long_desc["description"]) == 512
     assert validate_payload(dict(base, attack_type="RDP Brute-force")) is None
 
 

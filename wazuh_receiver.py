@@ -102,13 +102,20 @@ def validate_payload(payload: dict) -> str | None:
         payload["severity"] = severity.upper()
 
     # attack_type and description reach the dashboard, the notification bodies
-    # and the AI prompt. Same treatment as device_name.
+    # and the AI prompt. Same treatment as device_name — except an over-long
+    # description is cut, not refused: Wazuh fills rule descriptions from
+    # event fields ($(win.eventdata.sourceImage)), so a deep path made a real
+    # attack's alert bounce off the webhook and vanish.
     for field, limit in (("attack_type", 64), ("description", 512)):
         if field in payload:
             if not isinstance(payload[field], str):
                 return f"Invalid {field}: expected a string"
             if len(payload[field]) > limit:
-                return f"Invalid {field}: at most {limit} characters"
+                if field == "attack_type":
+                    return f"Invalid {field}: at most {limit} characters"
+                logger.warning("description of rule_id=%s cut from %d to %d characters",
+                               payload["rule_id"], len(payload[field]), limit)
+                payload[field] = payload[field][:limit]
 
     # Timestamp: use provided or generate.
     #
@@ -280,19 +287,7 @@ def process_alert(payload: dict) -> int:
                          rule_id, payload["rule_level"])
             return -1
 
-    # Determine attack type
-    attack_type = payload.get("attack_type") or _infer_attack_type(rule_id)
-    # Unmapped Wazuh rules have no STRIDE tag, and used to display the bare word
-    # "Unknown". The integrator already sends the real Wazuh rule description as
-    # `description` (custom-insightshield.py), so show that instead — e.g.
-    # "Netstat listened ports status changed" beats "Unknown". Capped at the
-    # attack_type column's 64 chars. Skipped when description is the integrator's
-    # own "Wazuh rule <id>" placeholder (no rule description was available), since
-    # that just repeats the rule id already shown next to it.
-    if attack_type == "Unknown":
-        desc = (payload.get("description") or "").strip()
-        if desc and not desc.startswith(f"Wazuh rule {rule_id}"):
-            attack_type = desc[:64]
+    attack_type = attack_label(rule_id, payload)
 
     logger.info(
         "Processing alert: rule_id=%s severity=%s device=%s",
@@ -570,40 +565,69 @@ def _reuse_sibling_recommendation(
 _REUSE_HEADER_RE = re.compile(r"^\(Reused from alert #\d+[^)]*\)\s*", re.DOTALL)
 
 
-def _infer_attack_type(rule_id: str) -> str:
-    """Infer STRIDE-tagged attack type from rule_id using the Wazuh rule mapping."""
-    rule_map = {
-        "87701": "[I] LSASS Credential Dump",
-        "87702": "[I] LSASS Credential Dump",
-        "87710": "[I] LSASS Credential Dump",
-        "60122": "[S] RDP Brute-force",
-        "60204": "[S] RDP Brute-force",
-        "60106": "[S] RDP Brute-force",
-        "31151": "[D] SYN-flood",
-        "31152": "[D] SYN-flood",
-        "31153": "[D] SYN-flood",
-        "5402":  "[T] ARP-MitM",
-        "5403":  "[T] ARP-MitM",
-        "5404":  "[T] ARP-MitM",
-        "100044": "[T/D] Ransomware",
-        "100045": "[T/D] Ransomware",
-        "100046": "[T/D] Ransomware",
-        "554":   "[T/D] Ransomware",  # Wazuh syscheck FIM baseline rule
-        "550":   "[T/D] Ransomware",
-    }
-    # Also check custom rule ranges (100001-100049)
-    rid = int(rule_id) if rule_id.isdigit() else 0
-    if 100001 <= rid <= 100009:
-        return "[S] RDP Brute-force"
-    if 100010 <= rid <= 100019:
-        return "[I] LSASS Credential Dump"
-    if 100020 <= rid <= 100029:
-        return "[T/D] Ransomware"
-    if 100030 <= rid <= 100039:
-        return "[T] ARP-MitM"
-    if 100040 <= rid <= 100043:
-        return "[D] SYN-flood"
-    if 100044 <= rid <= 100049:
-        return "[T/D] Ransomware"
+# One label per rule, "<plain name> · <STRIDE category>". Replaces id ranges,
+# which labelled every rule in a block alike — a new user account read as
+# "RDP Brute-force", every POS file change as "LSASS Credential Dump". Stock
+# ids only where the stock rule really is that attack: 877xx are pfSense, 60106
+# is a successful logon, 3115x are web-log rules and 550/554 are every FIM
+# change — unmapped, they show Wazuh's own description. STRIDE has no
+# reconnaissance category; "Information disclosure" is the nearest (100022,
+# 100030). Every label fits attack_type's 64-character payload limit.
+ATTACK_LABELS = {
+    "100001": "Brute-force login attempt · Spoofing",
+    "100002": "Admin login after business hours · Spoofing",
+    "100003": "New user account created · Elevation of privilege",
+    "100004": "User added to Administrators · Elevation of privilege",
+    "100010": "POS memory scraping (card data theft) · Information disclosure",
+    "100011": "POS program files changed · Tampering",
+    "100012": "Program dropped into POS folder · Tampering",
+    "100013": "New Windows service installed · Elevation of privilege",
+    "100014": "Suspicious program launched · Tampering",
+    "100020": "ARP spoofing (man-in-the-middle) · Spoofing",
+    "100021": "Duplicate IP address (possible MitM) · Spoofing",
+    "100022": "New device seen on network · Information disclosure",
+    "100023": "Gateway address hijacked on this PC (ARP spoofing) · Spoofing",
+    "100030": "Port scan · Information disclosure",
+    "100031": "SYN flood on this PC · Denial of service",
+    "100040": "Network flood (SYN) · Denial of service",
+    "100041": "Sustained network flood · Denial of service",
+    "100042": "POS service crashed · Denial of service",
+    "100043": "POS service stopped · Denial of service",
+    "100044": "File changed in POS shared folder · Tampering",
+    "100045": "Ransomware-style file rename · Tampering",
+    "100046": "Ransomware: mass file changes · Tampering, Denial of service",
+    "100047": "Ransomware: encryption confirmed · Tampering, Denial of service",
+    "100050": "Baseline: login in business hours",
+    "100051": "Baseline: service started",
+    "100052": "Baseline: Windows Update",
+    "100053": "Baseline: USB storage",
+    "100054": "Baseline: password reset",
+    "100055": "Baseline: scheduled task",
+    "100056": "Baseline: explicit credentials",
+    "60122": "Failed login · Spoofing",
+    "60204": "Repeated failed logins · Spoofing",
+    "92900": "Credential dumping (LSASS) · Information disclosure",
+}
 
-    return rule_map.get(rule_id, "Unknown")
+
+def _infer_attack_type(rule_id: str) -> str:
+    return ATTACK_LABELS.get(rule_id, "Unknown")
+
+
+def attack_label(rule_id: str, payload: dict) -> str:
+    """The attack_type stored for an alert. Shared by ingest and
+    scripts/relabel_alerts.py, so relabelling old rows gives exactly what a
+    fresh ingest of the same payload would.
+
+    Unmapped rules show the Wazuh rule description the integrator sends
+    (custom-insightshield.py) — "Netstat listened ports status changed" beats
+    "Unknown" — in full; it was cut at 64 characters mid-word. Skipped when it
+    is the integrator's own "Wazuh rule <id>" placeholder, which only repeats
+    the rule id shown next to it.
+    """
+    label = payload.get("attack_type") or _infer_attack_type(rule_id)
+    if label == "Unknown":
+        desc = str(payload.get("description") or "").strip()
+        if desc and not desc.startswith(f"Wazuh rule {rule_id}"):
+            label = desc
+    return label

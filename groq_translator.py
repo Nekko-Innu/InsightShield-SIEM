@@ -85,13 +85,6 @@ STATIC_TEMPLATES = {
         "WHAT TO DO: Stop any logins or payment transactions. Notify your "
         "manager and IT immediately. Check nearby devices too."
     ),
-    "wifi": (
-        "WHAT HAPPENED: The network settings on {device} were changed "
-        "unexpectedly.\n"
-        "HOW SERIOUS: A fake network may be trying to steal information.\n"
-        "WHAT TO DO: Stop all transactions. Do not connect to any new WiFi "
-        "networks. Notify your branch manager and IT now."
-    ),
     # Default for any rule_id not in RULE_TO_TEMPLATE. Says only what is
     # actually known — that something was flagged — instead of asserting a
     # specific attack the app cannot identify.
@@ -104,18 +97,15 @@ STATIC_TEMPLATES = {
     ),
 }
 
-# Map rule_id prefixes to template keys
+# rule_id -> template key. Only rules the template actually describes; the rest
+# (after-hours admin, new account, POS file changes, new service, service
+# crash, ransomware, port scan) get "generic" rather than a wrong story — a new
+# user account used to read as a failed-login attempt.
 RULE_TO_TEMPLATE = {
-    "87701": "lsass_dump", "87702": "lsass_dump", "87710": "lsass_dump",
-    "100010": "lsass_dump", "100011": "lsass_dump", "100012": "lsass_dump",
-    "60122": "rdp_bruteforce", "60204": "rdp_bruteforce", "60106": "rdp_bruteforce",
-    "100001": "rdp_bruteforce", "100002": "rdp_bruteforce", "100003": "rdp_bruteforce",
-    "31151": "syn_flood", "31152": "syn_flood", "31153": "syn_flood",
-    "100040": "syn_flood", "100041": "syn_flood", "100042": "syn_flood",
-    "5402": "arp_mitm", "5403": "arp_mitm", "5404": "arp_mitm",
-    "100030": "arp_mitm", "100031": "arp_mitm",
-    "5715": "wifi", "5706": "wifi", "5710": "wifi",
-    "100020": "wifi", "100021": "wifi", "100022": "wifi",
+    "100010": "lsass_dump", "92900": "lsass_dump",
+    "60122": "rdp_bruteforce", "60204": "rdp_bruteforce", "100001": "rdp_bruteforce",
+    "100031": "syn_flood", "100040": "syn_flood", "100041": "syn_flood",
+    "100020": "arp_mitm", "100021": "arp_mitm", "100022": "arp_mitm", "100023": "arp_mitm",
 }
 
 

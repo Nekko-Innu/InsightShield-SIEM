@@ -184,8 +184,10 @@
            characters ("WHAT HA…") and the list could not be skimmed; the id and
            rule id ride along muted for anyone cross-referencing with IT.
            Plain text, not a link — the View button already goes to /alert/<id>
-           and a second target inside a card is a mis-click waiting to happen. #}
-        <div class="text-sm font-semibold text-slate-800 leading-snug truncate">
+           and a second target inside a card is a mis-click waiting to happen.
+           line-clamp-2, not truncate: readable per-rule labels and full stock
+           Wazuh descriptions can run long; the title tooltip keeps the whole name. #}
+        <div class="text-sm font-semibold text-slate-800 leading-snug line-clamp-2" title="{{ a.attack_type | default('Alert') }}">
           {{ a.attack_type | default('Alert') }}
           <span class="font-mono text-xs font-normal text-slate-400">#{{ a.id }} · rule {{ a.rule_id }}</span>
         </div>

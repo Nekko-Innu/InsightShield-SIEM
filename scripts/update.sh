@@ -88,7 +88,7 @@ else
 fi
 
 # ── 4b. One-shot data migrations ─────────────────────────────────────────────
-# Both are idempotent, so they run on every update and no-op once applied:
+# All are idempotent, so they run on every update and no-op once applied:
 #   repair_providers  — fix any known-bad AI model slug, ensure Groq is primary
 #                       (needs GROQ_API_KEY in .env to add Groq).
 #   backfill_autoclose — close pre-existing MEDIUM/LOW/INFO alerts that predate
@@ -97,10 +97,13 @@ fi
 #                        held Wazuh's UTC and our PHT side by side, which sorted
 #                        the table wrong and dropped rows out of every
 #                        recent-window query.
+#   relabel_alerts     — recompute attack_type with the label ingest uses now,
+#                        replacing range-guessed labels ("[T/D] Ransomware" on
+#                        every FIM change) and titles cut at 64 characters.
 # Run as the service user with cwd=$APP so .env loads and the DB path resolves
 # the same way the app does.
 if [ -x "$VENV/bin/python" ]; then
-  for m in repair_providers backfill_autoclose normalize_timestamps; do
+  for m in repair_providers backfill_autoclose normalize_timestamps relabel_alerts; do
     if runuser -u "$SVC_USER" -- sh -c "cd '$APP' && '$VENV/bin/python' scripts/$m.py" >/dev/null 2>&1; then
       pass "migrate: $m applied"
     else
