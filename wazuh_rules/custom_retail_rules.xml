@@ -118,11 +118,14 @@
     <group>insightshield_pos_malware,malware,</group>
   </rule>
 
-  <!-- Suspicious new process created on POS terminal -->
+  <!-- Suspicious new process created on POS terminal. Path only: matching
+       cmd.exe/powershell.exe anywhere fired every 10 s on the agent's own
+       command monitors (agent.conf runs them through SysWOW64\cmd.exe), and
+       on every admin script. psexec-style remote execution is 100013. -->
   <rule id="100014" level="10">
     <if_sid>60103</if_sid>
     <field name="win.system.eventID">^4688$</field>
-    <field name="win.eventdata.newProcessName" type="pcre2">\\Temp\\|\\AppData\\|cmd\.exe|powershell\.exe</field>
+    <field name="win.eventdata.newProcessName" type="pcre2">\\Temp\\|\\AppData\\</field>
     <description>Insight Shield: Program launched from an unusual place — $(win.eventdata.newProcessName)</description>
     <group>insightshield_pos_malware,execution,</group>
   </rule>

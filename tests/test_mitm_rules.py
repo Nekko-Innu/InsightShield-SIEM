@@ -91,6 +91,18 @@ def test_victim_side_rules_fire_once_per_change():
             assert len(r.findall("match")) == 1, r.get("id")
 
 
+def test_suspicious_program_rule_ignores_the_agents_own_commands():
+    # Live on the Manager PC: 100014 fired every 10 s on the syn-watch monitor.
+    import re
+    rule = next(r for r in _rules() if r.get("id") == "100014")
+    pattern = re.compile(next(f.text for f in rule.iter("field")
+                              if f.get("name") == "win.eventdata.newProcessName"))
+    for own in (r"C:\\Windows\\SysWOW64\\cmd.exe",
+                r"C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe"):
+        assert not pattern.search(own), own
+    assert pattern.search(r"C:\\Users\\cashier\\AppData\\Local\\Temp\\mimikatz.exe")
+
+
 def test_every_custom_rule_has_a_label_that_fits():
     for r in _rules():
         label = wazuh_receiver._infer_attack_type(r.get("id"))
