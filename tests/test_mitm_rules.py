@@ -34,6 +34,7 @@ STOCK_PARENTS = {
     "60103", "60106", "60109", "60118", "60119", "60122", "60154",  # Windows security
     "61100", "61102", "61107", "61138", "61612",                    # Windows system, Sysmon 10
     "86601",                                # Suricata alert
+    "92900",                                # LSASS read (0945-sysmon_id_10.xml)
 }
 
 
@@ -55,7 +56,7 @@ def test_no_xml_declaration():
 
 
 def test_rule_count():
-    assert len(_rules()) == 33
+    assert len(_rules()) == 34
 
 
 def test_mitm_rules_hang_off_arpwatch_not_sudo():
@@ -162,8 +163,22 @@ def test_pos_directory_rule_leaves_the_shared_folder_to_the_ransomware_chain():
     assert neg == [r"(?i)C:\\POS\\shared"], neg
 
 
+def test_noise_suppressors_are_level_zero_and_nothing_else_is():
+    # level 0 is the whole mechanism: analysisd breaks out of the rule loop on
+    # it, before the integrator, the frequency lists and the dashboard. It also
+    # means a suppressor cannot feed if_matched_sid — which is why 100044 stays
+    # at level 8 and its own alerts get bulk-resolved instead of silenced.
+    suppressors = [r.get("id") for r in _rules() if r.get("level") == "0"]
+    assert suppressors == ["100090"], suppressors
+    for r in _rules():
+        if r.get("id") in suppressors:
+            assert "insightshield_noise" in r.findtext("group"), r.get("id")
+
+
 def test_every_rule_in_the_file_has_a_label_that_fits():
     for r in _rules():
+        if r.get("level") == "0":
+            continue  # analysisd drops it before the integrator: no alert to label
         label = wazuh_receiver._infer_attack_type(r.get("id"))
         assert label != "Unknown", r.get("id")
         assert len(label) <= 64, label  # attack_type's payload limit

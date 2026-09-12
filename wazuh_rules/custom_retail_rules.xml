@@ -437,4 +437,33 @@
     <group>insightshield_retail_baseline,remote_access,</group>
   </rule>
 
+  <!-- ═══════════════════════════════════════════════════════
+       CATEGORY 7 — NOISE SUPPRESSION
+       level="0" means matched but never alerted: analysisd breaks out of the
+       rule loop on level 0, before the event reaches the integrator, the
+       frequency lists, or the dashboard.
+       Only for sources that recur forever. One-time install noise gets
+       resolved on the dashboard, not blinded here — every rule in this
+       category is a detection switched off, so the list stays short.
+       ═══════════════════════════════════════════════════════ -->
+
+  <!-- Windows Defender's real-time engine reads LSASS on every scan, so
+       Sysmon Event 10 raises stock 92900 "possible credential dump" several
+       times an hour on every agent, forever.
+
+       Stock 92900 already tries to exclude this class of reader, but its
+       negate covers "C:\Program Files" and MsMpEng.exe runs from
+       C:\ProgramData\Microsoft\Windows Defender\Platform\<version>\ — a
+       different root, so it slips through.
+
+       Matched on the bare filename: that Platform\<version> directory is
+       rewritten by every Defender update, and a pattern pinned to the path
+       would silently stop suppressing the day Defender upgrades. -->
+  <rule id="100090" level="0">
+    <if_sid>92900</if_sid>
+    <field name="win.eventdata.sourceImage" type="pcre2">(?i)MsMpEng\.exe$</field>
+    <description>Insight Shield: Windows Defender's own LSASS scan — not a credential dump</description>
+    <group>insightshield_noise,</group>
+  </rule>
+
 </group>
