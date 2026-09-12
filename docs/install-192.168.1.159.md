@@ -33,7 +33,7 @@ network.
 | Wazuh dashboard port | `https://192.168.1.159` (443) | **`https://192.168.1.159:8443`** |
 | Port 443 | Wazuh dashboard | nginx → Insight Shield |
 | `/var/ossec/etc/ossec.conf` | as-is | one `<ossec_config>` block appended (backup taken) |
-| `/var/ossec/etc/rules/` | stock | `+ custom_retail_rules.xml` (rule IDs 100001-100056) |
+| `/var/ossec/etc/rules/` | stock | `+ custom_retail_rules.xml` (rule IDs 100001-100099, plus three stock arpwatch rules overwritten to level 3) |
 | `/var/ossec/integrations/` | stock | `+ custom-insightshield`, `+ custom-insightshield.py` |
 | ufw | probably inactive | enabled, default deny incoming |
 
@@ -858,8 +858,6 @@ Hit these and you have not broken anything:
 | `docs/deployment-ubuntu.md` §2 | Quotes `cryptography>=42.0`; `requirements.txt` now says `>=50.0.0`. |
 | `docs/deployment-ubuntu.md` §5.6 | Warns that `.env.example` ships non-empty placeholders. It no longer does — every credential value is genuinely blank. |
 | `docs/deployment-ubuntu.md` line 568 | Says "empty `WAZUH_API_VERIFY` = TLS verification off". Backwards — empty now means verify against the system trust store. |
-| `wazuh_receiver._infer_attack_type` | Rules 100020-100022 are ARP/MitM but get labelled "Ransomware". |
-| `wazuh_receiver._infer_attack_type` | Rules 100050-100056 (baseline) all land as `attack_type = "Unknown"`. Propagates into the top-threats widget and the AI executive summary. |
 | `db.py:87` | Comment says "5 tables". There are 9. |
 | `gunicorn.conf.py` header | Says deploy to `/opt/insightshield/gunicorn.conf.py`. The unit actually loads `/opt/insightshield/insightshield/gunicorn.conf.py`. Cosmetic. |
 | `logrotate/insightshield` comment | Says `workers = 1`. It is 3. |

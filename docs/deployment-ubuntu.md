@@ -362,8 +362,12 @@ sudo /var/ossec/bin/wazuh-logtest -t     # must exit 0
 sudo systemctl restart wazuh-manager
 ```
 
-30 rules in ids `100001`–`100056`, group `insightshield_retail`. Level mapping
-matches `wazuh_receiver.LEVEL_MAP` exactly:
+Custom rules live in ids `100001`–`100099`, group `insightshield_retail`, plus
+three stock arpwatch rules (`7202`, `7204`, `7209`) overwritten to level 3. For
+the exact count, read `tests/test_mitm_rules.py::test_rule_count` — it is pinned
+there and fails when the file changes, which is why no number is repeated here.
+
+Level mapping matches `wazuh_receiver.LEVEL_MAP` exactly:
 
 | Wazuh level | Insight Shield severity |
 |---|---|
@@ -446,6 +450,18 @@ Two rule groups need agent-side setup, or they can never fire:
 - **File integrity monitoring** — rules `100011`, `100012`, `100044`–`100047`
   need a `<syscheck>` block watching `C:\POS\shared` in realtime or at
   `<frequency>30</frequency>`.
+
+  Two traps live here, and both fail silently — the rules load, Wazuh never
+  complains, and nothing ever fires. First, the field name is `file`; Wazuh
+  hands it the Windows path **lowercased**, and pcre2 is compiled without
+  `PCRE2_CASELESS`, so every pattern needs a leading `(?i)`. (`syscheck.path`
+  is only the key the JSON writer emits — as a rule field it resolves to
+  nothing.) Second, sibling rules are evaluated highest-level-first and the
+  first match wins, so a broad high-level rule swallows the narrow low-level
+  ones beneath it: `100011` at level 13 has to `negate` `C:\POS\shared`
+  explicitly, or `100044`/`100045` never see an event and the
+  `100046`/`100047` escalation is unreachable. Both are pinned by
+  `tests/test_mitm_rules.py`.
 
 The MitM rules `100020`–`100022` need **arpwatch** on the manager instead,
 watching the branch LAN interface and logging to syslog, which Wazuh already

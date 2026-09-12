@@ -185,7 +185,7 @@
 
   <p class="rb-body">
     <strong>Audit Objectives.</strong>
-    This report evaluates detection coverage and operational follow-through of the Insight Shield SIEM during the reporting period {{ date_from }} &rarr; {{ date_to }}. It covers every Wazuh-decoded alert that matched one of the 27 custom detection rules deployed in <span class="rb-meta">custom_retail_rules.xml</span>.
+    This report evaluates detection coverage and operational follow-through of the Insight Shield SIEM during the reporting period {{ date_from }} &rarr; {{ date_to }}. It covers every alert Wazuh forwarded over the integration webhook &mdash; both the 31 custom detection rules deployed in <span class="rb-meta">custom_retail_rules.xml</span> and any stock Wazuh rule that fired at level 2 or above.
   </p>
 
   <p class="rb-body" style="margin-top:14px;">
@@ -200,7 +200,7 @@
 
   <p class="rb-body" style="margin-top:14px;">
     <strong>Limitations.</strong>
-    This audit is scoped exclusively to the NIST CSF 2.0 &mdash; Detect function; Identify, Protect, Respond, Recover, and Govern are out of scope per the project thesis. The report includes only events that matched at least one custom rule; endpoint-native events that did not trigger a rule are excluded. AI-generated summaries are cached for at most one hour; cold-cache generation may add 2&ndash;4 seconds of latency to the first request.{% if current_user.is_it_admin %} Raw Wazuh JSON payloads in Appendix A preserve the original decoder output for independent verification.{% endif %}
+    This audit is scoped exclusively to the NIST CSF 2.0 &mdash; Detect function; Identify, Protect, Respond, Recover, and Govern are out of scope per the project thesis. The report includes only events that matched a Wazuh rule of level 2 or above, which is the integrator's forwarding threshold; endpoint-native events that matched no rule, and rules deliberately silenced at level 0, are excluded. AI-generated summaries are cached for at most one hour; cold-cache generation may add 2&ndash;4 seconds of latency to the first request.{% if current_user.is_it_admin %} Raw Wazuh JSON payloads in Appendix A preserve the original decoder output for independent verification.{% endif %}
   </p>
 
   <p class="rb-body" style="margin-top:14px;">

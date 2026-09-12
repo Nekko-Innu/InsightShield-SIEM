@@ -468,7 +468,7 @@ Insert the verbatim block below at `report.html:158`, between `</section>` of `#
 
   <p class="rb-body">
     <strong>Audit Objectives.</strong>
-    This report evaluates detection coverage and operational follow-through of the Insight Shield SIEM during the reporting period {{ date_from }} &rarr; {{ date_to }}. It covers every Wazuh-decoded alert that matched one of the 27 custom detection rules deployed in <span class="rb-meta">custom_retail_rules.xml</span>.
+    This report evaluates detection coverage and operational follow-through of the Insight Shield SIEM during the reporting period {{ date_from }} &rarr; {{ date_to }}. It covers every alert Wazuh forwarded over the integration webhook &mdash; both the 31 custom detection rules deployed in <span class="rb-meta">custom_retail_rules.xml</span> and any stock Wazuh rule that fired at level 2 or above.
   </p>
 
   <p class="rb-body" style="margin-top:14px;">
@@ -483,7 +483,7 @@ Insert the verbatim block below at `report.html:158`, between `</section>` of `#
 
   <p class="rb-body" style="margin-top:14px;">
     <strong>Limitations.</strong>
-    This audit is scoped exclusively to the NIST CSF 2.0 &mdash; Detect function; Identify, Protect, Respond, Recover, and Govern are out of scope per the project thesis. The report includes only events that matched at least one custom rule; endpoint-native events that did not trigger a rule are excluded. AI-generated summaries are cached for at most one hour; cold-cache generation may add 2&ndash;4 seconds of latency to the first request. Raw Wazuh JSON payloads in Appendix A preserve the original decoder output for independent verification.
+    This audit is scoped exclusively to the NIST CSF 2.0 &mdash; Detect function; Identify, Protect, Respond, Recover, and Govern are out of scope per the project thesis. The report includes only events that matched a Wazuh rule of level 2 or above, which is the integrator's forwarding threshold; endpoint-native events that matched no rule, and rules deliberately silenced at level 0, are excluded. AI-generated summaries are cached for at most one hour; cold-cache generation may add 2&ndash;4 seconds of latency to the first request. Raw Wazuh JSON payloads in Appendix A preserve the original decoder output for independent verification.
   </p>
 
   <p class="rb-body" style="margin-top:14px;">
@@ -642,7 +642,7 @@ Round I's diagnostic work surfaced two pre-existing bugs that are explicitly out
 
 2. **Round E credential_brute_force alerts have NULL `it_recommendation`**. The brute-force escalation path in `app.py` builds the alert row directly and calls `alert_router.dispatch` — does NOT go through `wazuh_receiver.process_alert()`, which is the only path that spawns the fire-and-forget IT recommender thread. Round I backfilled alert id=8 via a one-off diagnostic; future brute-force alerts will repeat the issue.
 
-Custom rule count verified at 27 in `wazuh_rules/custom_retail_rules.xml` (Unauthorized Access ×4, POS Malware ×5, MitM/ARP ×3, Ransomware ×4, DoS ×4, Baseline ×7). MITRE ATT&CK coverage metric explicitly out of scope — no real rule-to-MITRE mapping in code today.
+Custom rule count is pinned by `tests/test_mitm_rules.py::test_rule_count`, not restated here — it was 27 at Round I and is 31 custom (plus 3 stock arpwatch overrides) as of 2026-09-12, and every doc that hand-copied the old figure went stale silently. Read the test. MITRE ATT&CK coverage metric explicitly out of scope — no real rule-to-MITRE mapping in code today.
 
 ---
 

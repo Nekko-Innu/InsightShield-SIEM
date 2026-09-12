@@ -1375,7 +1375,7 @@ Plan-mode exploration surfaced the recommendation document's drift from actual c
 | 4 | Highlights line — agents-only vs agents + AI provider % | **Agents-only.** `{{ agents \| selectattr('status', 'equalto', 'active') \| list \| length }} of {{ agents \| length }}` | `summary.providers` shape was not confirmed in the route context. Agents-only requires only what's already passed |
 | 5 | Empty date range — should Methodology render? | **Yes.** Place outside the `{% if alerts %}` gate at `report.html:159` | Methodology explains how the data was collected and what was in scope — true regardless of whether alerts fired during the window. A zero-alert report should still explain itself |
 | 6 | Cache invalidation after prompt structure change | Bump `_make_cache_key` digest input with literal `"v2\|"` prefix | One-line change. Future prompt revisions bump to `v3\|`, `v4\|`, etc. Avoids requiring Flask restart or manual `cache.clear_all()` call after rollout |
-| 7 | Custom rule count to quote in Methodology | **27** — verified via grep of `<rule ` entries in `wazuh_rules/custom_retail_rules.xml` | Recommendation quoted 18; reality is 27 (Unauthorized Access ×4, POS Malware ×5, MitM/ARP ×3, Ransomware ×4, DoS ×4, Baseline ×7). Round 2 documentation drift |
+| 7 | Custom rule count to quote in Methodology | **Do not restate the number anywhere but `report.html`.** `tests/test_mitm_rules.py::test_rule_count` is the source of truth and fails when the file changes | Round I fixed a drifted count (18 → 27) by hand-copying the corrected figure into five files. By 2026-09-12 the file held 31 custom rules and all five copies were wrong again, in three different ways (27, 27, 27, 27, 30). One number, one place, one failing test — not five hand-maintained copies |
 | 8 | CSS additions for the new section | **Drop the proposed `#methodology-scope .rb-panel { break-inside: avoid }` rule.** Existing `.rb-panel { break-inside: avoid }` at `report-bureau.css:874-879` already covers it | The recommendation proposed redundant CSS without auditing the existing print stylesheet first. Dropping shrinks the diff to 3 files instead of 4 |
 
 #### 16.9.3 The new exec_summary prompt (verbatim, replaces lines 25-40 of `executive_summary.py`)
@@ -1480,7 +1480,7 @@ Placed between the closing `</section>` of `#executive-summary` at line 157 and 
 
   <p class="rb-body">
     <strong>Audit Objectives.</strong>
-    This report evaluates detection coverage and operational follow-through of the Insight Shield SIEM during the reporting period {{ date_from }} &rarr; {{ date_to }}. It covers every Wazuh-decoded alert that matched one of the 27 custom detection rules deployed in <span class="rb-meta">custom_retail_rules.xml</span>.
+    This report evaluates detection coverage and operational follow-through of the Insight Shield SIEM during the reporting period {{ date_from }} &rarr; {{ date_to }}. It covers every alert Wazuh forwarded over the integration webhook &mdash; both the 31 custom detection rules deployed in <span class="rb-meta">custom_retail_rules.xml</span> and any stock Wazuh rule that fired at level 2 or above.
   </p>
 
   <p class="rb-body" style="margin-top:14px;">
@@ -1495,7 +1495,7 @@ Placed between the closing `</section>` of `#executive-summary` at line 157 and 
 
   <p class="rb-body" style="margin-top:14px;">
     <strong>Limitations.</strong>
-    This audit is scoped exclusively to the NIST CSF 2.0 &mdash; Detect function; Identify, Protect, Respond, Recover, and Govern are out of scope per the project thesis. The report includes only events that matched at least one custom rule; endpoint-native events that did not trigger a rule are excluded. AI-generated summaries are cached for at most one hour; cold-cache generation may add 2&ndash;4 seconds of latency to the first request. Raw Wazuh JSON payloads in Appendix A preserve the original decoder output for independent verification.
+    This audit is scoped exclusively to the NIST CSF 2.0 &mdash; Detect function; Identify, Protect, Respond, Recover, and Govern are out of scope per the project thesis. The report includes only events that matched a Wazuh rule of level 2 or above, which is the integrator's forwarding threshold; endpoint-native events that matched no rule, and rules deliberately silenced at level 0, are excluded. AI-generated summaries are cached for at most one hour; cold-cache generation may add 2&ndash;4 seconds of latency to the first request. Raw Wazuh JSON payloads in Appendix A preserve the original decoder output for independent verification.
   </p>
 
   <p class="rb-body" style="margin-top:14px;">

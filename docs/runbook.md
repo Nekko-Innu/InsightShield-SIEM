@@ -277,6 +277,40 @@ services first; restoring under a running app races the WAL.
 
 ---
 
+## One-shot maintenance scripts
+
+Everything in `scripts/` that is not `install.sh` runs by hand, as the service
+user, **through the venv interpreter**. A bare `python3` has none of the
+dependencies:
+
+```bash
+cd /opt/insightshield/insightshield
+sudo -u insightshield /opt/insightshield/venv/bin/python scripts/<name>.py --help
+```
+
+| Script | What it does | Safe to re-run? |
+|---|---|---|
+| `bulk_resolve_alerts.py` | Closes open HIGH/CRITICAL rows left over from test activity, as a named IT admin with a note and one audit-log row. Filter with `--since` / `--until` / `--rules`. | Yes — it only touches rows still open |
+| `relabel_alerts.py` | Re-derives `attack_type` on existing rows so old alerts show what a fresh ingest would show. | Yes — idempotent by design, and tested for it |
+| `backfill_autoclose.py` | Auto-closes sub-HIGH alerts as the system actor. | Yes |
+| `normalize_timestamps.py` | Rewrites stored timestamps to the canonical offset. | Once per drift event |
+| `repair_providers.py` | Fixes `provider_used` on rows written during an AI-chain failure. | Yes |
+
+**`bulk_resolve_alerts.py` is a dry run unless you pass `--yes`.** Run it
+without the flag first, read the count it prints, then repeat with `--yes`:
+
+```bash
+sudo -u insightshield /opt/insightshield/venv/bin/python scripts/bulk_resolve_alerts.py \
+  --by <it-admin-username> --note "Test activity, not an attack" \
+  --rules 92213,92900,100014 --since "2026-09-12T00:00:00+08:00"
+```
+
+It deliberately leaves `it_recommendation` and `response_time_s` alone, and
+keeps an existing human acknowledgement — see the header comment in the file
+for why each of those would corrupt a different report if it did not.
+
+---
+
 ## Dependency review
 
 Dependencies are declared in `requirements.txt` and **installed from

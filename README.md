@@ -133,8 +133,9 @@ python -m pytest -m "not slow"  # skip the wall-clock wait
 ├── templates/  static/       Jinja2 views, design tokens, Bureau report stylesheet
 ├── nginx/  logrotate/  scripts/   Deployment assets and the idempotent Ubuntu installer
 ├── tests/                    pytest suite — Playwright end-to-end plus HTTP-level security tests
-└── wazuh_rules/              27 custom retail rules: unauthorized access, POS malware,
-                              MitM/ARP, ransomware, DoS, baseline
+└── wazuh_rules/              31 custom retail rules: unauthorized access, POS malware,
+                              MitM/ARP, ransomware, DoS, recon, baseline, noise
+                              suppression — plus 3 stock arpwatch overrides
 ```
 
 Both systemd units run the same application object. The only difference is that `worker.py` calls
