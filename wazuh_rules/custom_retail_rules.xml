@@ -103,10 +103,24 @@
     <group>insightshield_pos_malware,ram_scraping,critical,</group>
   </rule>
 
-  <!-- FIM: Unauthorized change detected in POS application directory -->
+  <!-- FIM: Unauthorized change detected in POS application directory
+
+       (?i) on every syscheck path below, here and on 100012/100044/100045.
+       The rule field is "file" (syscheck.c: fim_decoder->fields[FIM_FILE]);
+       syscheck.path is only the JSON output key and resolves to nothing at
+       match time. Wazuh hands that field the path lowercased — live event:
+       "c:\pos\shared\test_48.txt" — and w_expression_compile passes no
+       PCRE2_CASELESS, so the uppercase patterns these rules shipped with
+       never matched one event.
+
+       The negate is what lets the ransomware chain run. Siblings are
+       evaluated level-high-first (rules_list.c _OS_AddRule) and the first
+       match wins (rules.c, child loop), so 100011 at 13 would take every
+       event 100044 (8) and 100045 (12) exist to escalate. -->
   <rule id="100011" level="13">
     <if_sid>554,550</if_sid>
-    <field name="file" type="pcre2">C:\\POS|C:\\cashier|C:\\payment</field>
+    <field name="file" type="pcre2">(?i)C:\\POS|C:\\cashier|C:\\payment</field>
+    <field name="file" type="pcre2" negate="yes">(?i)C:\\POS\\shared</field>
     <description>Insight Shield: POS program files changed — malware suspected</description>
     <group>insightshield_pos_malware,file_integrity,</group>
   </rule>
@@ -115,7 +129,7 @@
   <rule id="100012" level="14">
     <if_sid>554</if_sid>
     <field name="file" type="pcre2">\.exe$|\.dll$|\.bat$|\.ps1$</field>
-    <field name="file" type="pcre2">C:\\POS|C:\\cashier|C:\\Temp</field>
+    <field name="file" type="pcre2">(?i)C:\\POS|C:\\cashier|C:\\Temp</field>
     <description>Insight Shield: New program dropped into a POS folder — malware installation suspected</description>
     <group>insightshield_pos_malware,file_integrity,critical,</group>
   </rule>
@@ -242,7 +256,7 @@
   <!-- Single FIM modification inside the POS shared folder — baseline event -->
   <rule id="100044" level="8">
     <if_sid>554,550</if_sid>
-    <field name="file" type="pcre2">C:\\POS\\shared|/mnt/pos_share</field>
+    <field name="file" type="pcre2">(?i)C:\\POS\\shared|/mnt/pos_share</field>
     <description>Insight Shield: File changed in the POS shared folder — watch for a larger pattern</description>
     <group>insightshield_ransomware,file_integrity,syscheck,</group>
   </rule>
@@ -250,7 +264,7 @@
   <!-- Suspicious new extension appended to files — common ransomware IoC -->
   <rule id="100045" level="12">
     <if_sid>554,550</if_sid>
-    <field name="file" type="pcre2">\.(encrypted|locked|crypt|enc|ryk|pay|wcry)$</field>
+    <field name="file" type="pcre2">(?i)\.(encrypted|locked|crypt|enc|ryk|pay|wcry)$</field>
     <description>Insight Shield: File renamed with a ransomware-style extension — encryption suspected</description>
     <group>insightshield_ransomware,file_integrity,t1486,</group>
     <mitre>

@@ -136,6 +136,32 @@ def test_time_windows_are_written_in_utc():
                        "100056": "00:00 - 13:00"}
 
 
+def test_fim_path_matchers_are_case_insensitive():
+    # Wazuh hands the rule engine the syscheck path lowercased (live event:
+    # "c:\pos\shared\test_48.txt") and w_expression_compile passes no
+    # PCRE2_CASELESS, so the uppercase patterns 100011/100012/100044 shipped
+    # with never matched one event — 100044 through 100047 had never fired.
+    # Only the syscheck "file" field is lowercased; 4688's newProcessName
+    # (100014) keeps the OS casing and is deliberately left case-sensitive,
+    # since (?i) there would newly match C:\Windows\TEMP and add noise.
+    import re
+    for r in _rules():
+        for f in r.iter("field"):
+            pat = f.text or ""
+            if f.get("name") == "file" and re.search(r"[A-Za-z]:\\\\", pat):
+                assert pat.startswith("(?i)"), (r.get("id"), pat)
+
+
+def test_pos_directory_rule_leaves_the_shared_folder_to_the_ransomware_chain():
+    # Siblings are evaluated level-high-first (_OS_AddRule) and the first match
+    # wins (OS_CheckIfRuleMatch's child loop), so 100011 at level 13 outranks
+    # 100045 (12) and 100044 (8) and would take every event they exist to
+    # escalate. 100046/100047 hang off those two and would stay unreachable.
+    r = next(x for x in _rules() if x.get("id") == "100011")
+    neg = [f.text for f in r.iter("field") if f.get("negate") == "yes"]
+    assert neg == [r"(?i)C:\\POS\\shared"], neg
+
+
 def test_every_rule_in_the_file_has_a_label_that_fits():
     for r in _rules():
         label = wazuh_receiver._infer_attack_type(r.get("id"))
