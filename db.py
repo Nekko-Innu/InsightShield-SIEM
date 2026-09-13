@@ -1048,10 +1048,13 @@ def get_alerts_missing_it_recommendation(
 ) -> list[dict]:
     """
     Open HIGH/CRITICAL alerts from the last `max_age_hours` with no IT
-    recommendation, oldest first. Feeds scheduler._it_rec_backfill.
+    recommendation, newest first. Feeds scheduler._it_rec_backfill.
 
-    Oldest-first because a backlog drains from the front; the operator looking
-    at a blank card is looking at the alert that has been blank longest.
+    Newest-first: a provider outage leaves a wall of blank rows, and when the
+    chain keeps failing the same oldest three were re-picked every sweep forever
+    while newer alerts never got a turn. Draining from the newest end means the
+    alert an operator is most likely looking at right now gets filled first, and
+    the capped/exhausted tail ages out instead of starving the queue.
     Resolved alerts are skipped — nobody is investigating those any more.
     """
     cutoff = (
@@ -1064,7 +1067,7 @@ def get_alerts_missing_it_recommendation(
         "  AND severity IN ('HIGH', 'CRITICAL') "
         "  AND (it_recommendation IS NULL OR it_recommendation = '' "
         "       OR it_recommendation = ?) "
-        "ORDER BY id ASC LIMIT ?",
+        "ORDER BY id DESC LIMIT ?",
         (cutoff, config.AI_CHAIN_EXHAUSTED, limit),
     ).fetchall()
     return [dict(r) for r in rows]

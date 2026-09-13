@@ -176,7 +176,9 @@ include live credentials in the report.
 | [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md) · [REBUILD_SPEC.md](REBUILD_SPEC.md) | Full system design and the master build spec |
 
 For a production install, `scripts/install.sh` automates most of the Ubuntu guide and is safe to
-re-run.
+re-run. To deploy an update, run `sudo scripts/deploy.sh` — it runs `update.sh` (app tier) then
+`install.sh` (rules + Wazuh) and verifies the result (ruleset compiles, token in sync, services
+up, live webhook returns 200). See `docs/runbook.md` § "Deploying an update".
 
 ## Release history
 

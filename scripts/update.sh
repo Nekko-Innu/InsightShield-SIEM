@@ -124,6 +124,23 @@ for unit in insightshield insightshield-worker; do
   fi
 done
 
+# ── 5b. Webhook token drift check ────────────────────────────────────────────
+# update.sh does not touch ossec.conf (install.sh owns the <integration> block),
+# but the token there and WAZUH_WEBHOOK_TOKEN in .env must match or every real
+# Wazuh alert is rejected while a manual curl (which reads .env) still passes —
+# the exact drift that silently stopped ingest in the field. Warn, don't fix:
+# the fix is 'sudo scripts/install.sh', which re-syncs the key.
+OSSEC_CONF=/var/ossec/etc/ossec.conf
+if [ -r "$OSSEC_CONF" ] && [ -r "$APP/.env" ]; then
+  CONF_TOK="$(grep -oP '(?<=<api_key>)[^<]+' "$OSSEC_CONF" 2>/dev/null | head -1)"
+  ENV_TOK="$(grep -oP '(?<=^WAZUH_WEBHOOK_TOKEN=).*' "$APP/.env" 2>/dev/null | tr -d '\r')"
+  if [ -n "$CONF_TOK" ] && [ "$CONF_TOK" = "$ENV_TOK" ]; then
+    pass "webhook token in ossec.conf matches .env"
+  else
+    warn "webhook token MISMATCH (ossec.conf vs .env) — run 'sudo scripts/install.sh' to re-sync, or Wazuh alerts will be rejected"
+  fi
+fi
+
 # ── 6. Verify ────────────────────────────────────────────────────────────────
 if [ -x "$APP/scripts/healthcheck.sh" ]; then
   echo

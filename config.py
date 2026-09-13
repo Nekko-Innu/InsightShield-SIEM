@@ -298,6 +298,19 @@ AI_CHAIN_EXHAUSTED = "AI_CHAIN_EXHAUSTED"
 # that matter instead of burning quota on noise.
 AI_ENABLED_SEVERITIES = {"HIGH", "CRITICAL"}
 
+# Hard cap on live AI attempts per (rule_id, device) per rolling 24 h. A single
+# noisy rule — a false-positive LSASS or ARP detection firing hourly — otherwise
+# spends the whole free-tier budget on the same alert over and over: the manager
+# translation, the retry, and the IT recommendation each fire per row, and the
+# recommendation prompt embeds the raw alert so its cache never hits a repeat.
+# Past the cap, that rule+device falls back to the static template and to reusing
+# a sibling's recommendation; the alert is still stored, notified, and shown —
+# only the AI spend is capped. Counted in rate_events (shared across workers and
+# the scheduler) so failures count too, which is the point: a rule that only ever
+# fails must stop being retried. 0 disables the cap.
+AI_REPEAT_CAP = int(os.environ.get("AI_REPEAT_CAP", "5"))
+AI_REPEAT_WINDOW_S = 86400
+
 # The IT recommender fires a SECOND AI call per alert (IT-only investigation
 # steps). OFF by default so it never competes with the manager translation for
 # the free-tier budget — the alert detail page shows its static fallback line

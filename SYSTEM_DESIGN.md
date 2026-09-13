@@ -50,13 +50,17 @@ Insight Shield is a real-time SIEM dashboard built on top of Wazuh. It consumes 
 
 **After-hours escalation** (`alert_router.is_outside_hours`): when the current PHT hour is `< 8` or `>= 21`, severity escalates one tier (MEDIUM → HIGH, HIGH → CRITICAL). INFORMATIONAL/LOW/CRITICAL are unchanged — no double-escalation. The escalation happens before the routing matrix is consulted.
 
-**Daily housekeeping** (APScheduler — see §7.5). Five jobs, all registered by `scheduler.init_scheduler()`, which **exactly one process** may call — in production that is `insightshield-worker.service`, not a gunicorn worker:
+**Daily housekeeping** (APScheduler — see §7.5). Seven jobs, all registered by `scheduler.init_scheduler()`, which **exactly one process** may call — in production that is `insightshield-worker.service`, not a gunicorn worker:
 
 - `midnight_health_reset` — cron 00:00 PHT; logs the rolling-24h window flip.
 - `daily_db_backup` — cron 02:00 PHT; runs `backup.run_daily_backup`.
 - `retention_purge` — cron 03:00 PHT; `db.purge_old_rows(audit_days=config.AUDIT_RETENTION_DAYS, error_days=config.ERROR_RETENTION_DAYS)` plus a WAL checkpoint. Runs after the 02:00 backup so the backup still captures the pre-purge state.
 - `agent_status_poll` — interval 30 s; calls `agent_status.refresh()`, which writes the snapshot to the `settings` table. It publishes nothing — the write itself is the notification (see §10.1).
 - `escalation_sweep` — interval `config.ESCALATION_INTERVAL_MIN` (5 min); one sweep over `db.get_unacked_critical_alerts(...)`, not one job per alert. Acknowledgment takes effect because the next sweep re-reads the alert row.
+- `_authz_probe_sweep` — interval `config.AUTHZ_PROBE_SWEEP_MIN` (10 min); raises a HIGH alert when a user trips the authorization-probe threshold.
+- `_it_rec_backfill` — interval `config.IT_REC_BACKFILL_MIN` (10 min; 0 disables); fills `IT_REC_BACKFILL_BATCH` blank IT recommendations per sweep, newest first, reusing a sibling before spending a call and skipping any `(rule, device)` already at `config.AI_REPEAT_CAP`.
+
+AI spend is bounded per `(rule_id, device)` by `config.AI_REPEAT_CAP` (default 5 / 24 h, counted in `rate_events`): past the cap a noisy rule falls back to the static template and sibling reuse instead of re-running the provider chain on every repeat.
 
 ---
 

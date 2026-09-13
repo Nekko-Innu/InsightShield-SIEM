@@ -16,6 +16,7 @@ import db
 import groq_translator
 import it_recommender
 import alert_router
+import rate_limit
 import validator
 
 logger = logging.getLogger("insightshield.wazuh_receiver")
@@ -302,7 +303,11 @@ def process_alert(payload: dict) -> int:
     # absorb a translation (plus an IT recommendation) on every INFORMATIONAL/
     # LOW/MEDIUM alert. Below the gate, the manager translation uses the static
     # template and the IT recommender does not run at all.
-    ai_ok = config.ai_enabled_for(severity)
+    # The severity gate says this alert MAY use AI; the repeat cap says this
+    # rule+device has not already burned its daily budget. Both must hold, and
+    # the cap consumes a slot here because an AI-eligible alert goes on to spend
+    # one on the translation just below. IT rec and the retry ride the same slot.
+    ai_ok = config.ai_enabled_for(severity) and _ai_repeat_ok(rule_id, device_name)
 
     try:
         # Step 1: AI translation (manager-facing), or static template when the
@@ -612,11 +617,39 @@ ATTACK_LABELS = {
     "60122": "Failed login · Spoofing",
     "60204": "Repeated failed logins · Spoofing",
     "92900": "Credential dumping (LSASS) · Information disclosure",
+    # Custom LSASS rule — same threat as 92900, one label so the dashboard,
+    # AI prompt, and report aggregate them as one category (see custom_retail_rules 100099).
+    "100099": "Credential dumping (LSASS) · Information disclosure",
 }
 
 
 def _infer_attack_type(rule_id: str) -> str:
     return ATTACK_LABELS.get(rule_id, "Unknown")
+
+
+def _ai_cap_key(rule_id: str, device_name: str) -> str:
+    return f"ai-cap:{rule_id}:{device_name}"
+
+
+def _ai_repeat_ok(rule_id: str, device_name: str) -> bool:
+    """True if this rule+device is still under config.AI_REPEAT_CAP for the
+    rolling window. Consumes one slot per True (an AI-eligible alert spends
+    one on its translation). 0 disables the cap. Shared with the backfill,
+    which checks the same key read-only so its free reuse path costs nothing.
+    """
+    if config.AI_REPEAT_CAP <= 0:
+        return True
+    allowed, _ = rate_limit.can_call(
+        _ai_cap_key(rule_id, device_name),
+        limit_per_min=config.AI_REPEAT_CAP,
+        window_seconds=config.AI_REPEAT_WINDOW_S,
+    )
+    if not allowed:
+        logger.info(
+            "AI capped (rule_id=%s device=%s cap=%d/%ds) — static template only",
+            rule_id, device_name, config.AI_REPEAT_CAP, config.AI_REPEAT_WINDOW_S,
+        )
+    return allowed
 
 
 def attack_label(rule_id: str, payload: dict) -> str:

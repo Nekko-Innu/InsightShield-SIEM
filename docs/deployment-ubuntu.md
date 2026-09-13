@@ -6,6 +6,16 @@ Wazuh and Insight Shield can be driven from a GUI as well as the terminal.
 
 Monitored endpoints are Windows POS/manager PCs running the Wazuh agent.
 
+> **⚠ Port topology — read before following any `443`/`8443` step below.**
+> The live deployment is the **reverse** of what the prose in this runbook
+> describes. The **Wazuh dashboard keeps its default `443`**; **Insight Shield's
+> nginx listens on `8444`**. The scripts (`install.sh`, `firewall.sh`,
+> `nginx/insightshield.conf`) are all correct; only this narrative is stale.
+> Canonical URLs: Insight Shield `https://192.168.1.159:8444`, Wazuh dashboard
+> `https://192.168.1.159`. Wherever the text below says "move the dashboard to
+> 8443, Insight Shield on 443", read "dashboard stays on 443, Insight Shield on
+> 8444". `scripts/deploy.sh` verifies the live ports.
+
 ---
 
 ## 0. Read this first — the five things that break a fresh install
