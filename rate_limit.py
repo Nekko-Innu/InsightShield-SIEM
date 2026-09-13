@@ -80,6 +80,28 @@ def can_call(provider: str, limit_per_min: int,
     return False, max(0.0, (oldest + window_seconds) - now)
 
 
+def count_in_window(provider: str, window_seconds: float = WINDOW_SECONDS) -> int:
+    """
+    How many calls to <provider> are recorded in the last <window_seconds>.
+
+    Read-only: unlike can_call it neither inserts nor decides — it just counts.
+    Used by the backfill sweep to see whether a rule+device has already spent
+    its AI budget before it decides to reuse-or-skip, so a plain look never
+    consumes a slot the way a can_call check would.
+    """
+    now = time.time()
+    conn = db._get_conn()
+    conn.execute(
+        "DELETE FROM rate_events WHERE key = ? AND ts < ?",
+        (provider, now - window_seconds),
+    )
+    count = conn.execute(
+        "SELECT COUNT(*) FROM rate_events WHERE key = ?", (provider,)
+    ).fetchone()[0]
+    conn.commit()
+    return count
+
+
 def saturate(provider: str, limit_per_min: int,
              window_seconds: float = WINDOW_SECONDS) -> None:
     """

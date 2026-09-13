@@ -466,4 +466,58 @@
     <group>insightshield_noise,</group>
   </rule>
 
+  <!-- 92900 fires on ANY grantedAccess string CONTAINING 0x1010 or 0x40, with
+       no anchors: svchost's routine 0x101000 open matches 0x1010 as a
+       substring and pages HIGH. 0x101000 is SYNCHRONIZE|QUERY_LIMITED_INFO —
+       no read access, so a process holding only it cannot dump memory.
+       Suppress it. 100090 already covers Defender's own reads; between the two,
+       92900's known false positives are silenced without weakening the real
+       read-access detection (0x1010, 0x1410, 0x1fffff still alert via 92900). -->
+  <rule id="100100" level="0">
+    <if_sid>92900</if_sid>
+    <field name="win.eventdata.grantedAccess" type="pcre2">^0x101000$</field>
+    <description>Insight Shield: LSASS opened without read access (0x101000) — routine</description>
+    <group>insightshield_noise,</group>
+  </rule>
+
+  <!-- Suppress stock 92205 during the lab. It fires on every PowerShell-launched
+       executable (Wazuh's own localfiles, test scripts, Windows services). Not a
+       real signal in this environment. Blanket suppressor by design — narrow it
+       or remove it before this ruleset goes anywhere real. -->
+  <rule id="100096" level="0">
+    <if_sid>92205</if_sid>
+    <description>Suppressed: routine PowerShell executable creation</description>
+    <group>insightshield_noise,</group>
+  </rule>
+
+  <!-- LSASS credential dumping — broader than stock 92900, which requires the
+       access mask to CONTAIN 0x1010 or 0x40. procdump -ma opens LSASS with
+       0x1FFFFF (PROCESS_ALL_ACCESS), which contains neither, so 92900 stays
+       silent on the real attack. Verified 2026-09-12: 24 procdump Event-10
+       opens at 0x1FFFFF on POSsys3, none caught by any rule.
+
+       This fires on any Event-10 LSASS open EXCEPT:
+       - grantedAccess that cannot read memory (0x1000 query-only, 0x100000
+         SYNCHRONIZE, 0x101000) — kills the EdgeUpdate/CompatTelRunner/svchost
+         query-only noise by capability, not by name;
+       - MsMpEng.exe (Defender, matched on filename because its Platform\<ver>
+         path is rewritten every update — same reasoning as 100090);
+       - the Wazuh agent itself, matched on FULL PATH so a dumper renamed
+         wazuh-agent.exe elsewhere is NOT trusted (it uses 0x1410/0x1fffff, the
+         same read masks procdump does — only the path distinguishes it).
+       Each <field> value is one line: eventchannel field text includes the
+       element's whitespace, so a multi-line negate pattern with ^...$ anchors
+       would never match and silently disable the rule. -->
+  <rule id="100099" level="12">
+    <if_group>sysmon_event_10</if_group>
+    <field name="win.eventdata.targetImage" type="pcre2">(?i)\\lsass\.exe$</field>
+    <field name="win.eventdata.grantedAccess" type="pcre2" negate="yes">^0x(1000|100000|101000)$</field>
+    <field name="win.eventdata.sourceImage" type="pcre2" negate="yes">(?i)(\\MsMpEng\.exe$|^C:\\Program Files \(x86\)\\ossec-agent\\wazuh-agent\.exe$)</field>
+    <description>Insight Shield: LSASS accessed by $(win.eventdata.sourceImage) — credential dumping suspected</description>
+    <group>insightshield_credential_access,lsass_access,</group>
+    <mitre>
+      <id>T1003.001</id>
+    </mitre>
+  </rule>
+
 </group>

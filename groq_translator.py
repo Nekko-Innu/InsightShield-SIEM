@@ -102,7 +102,7 @@ STATIC_TEMPLATES = {
 # crash, ransomware, port scan) get "generic" rather than a wrong story — a new
 # user account used to read as a failed-login attempt.
 RULE_TO_TEMPLATE = {
-    "100010": "lsass_dump", "92900": "lsass_dump",
+    "100010": "lsass_dump", "92900": "lsass_dump", "100099": "lsass_dump",
     "60122": "rdp_bruteforce", "60204": "rdp_bruteforce", "100001": "rdp_bruteforce",
     "100031": "syn_flood", "100040": "syn_flood", "100041": "syn_flood",
     "100020": "arp_mitm", "100021": "arp_mitm", "100022": "arp_mitm", "100023": "arp_mitm",

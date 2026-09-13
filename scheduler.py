@@ -272,6 +272,7 @@ def _it_rec_backfill() -> None:
     """
     import db
     import it_recommender
+    import rate_limit
     import wazuh_receiver
 
     alerts = db.get_alerts_missing_it_recommendation(
@@ -286,9 +287,29 @@ def _it_rec_backfill() -> None:
         rule_id = str(alert.get("rule_id") or "")
         device_name = alert.get("device_name") or ""
         try:
+            # Reuse is free — always try it first, before the cap.
             if wazuh_receiver._reuse_sibling_recommendation(
                 alert_id, rule_id, device_name
             ):
+                continue
+            # Over the daily AI budget for this rule+device: stop retrying it.
+            # Checked read-only (count, not can_call) so this look never spends
+            # a slot, and written as a note — not left blank — so the next sweep
+            # doesn't re-pick the same capped row every 10 minutes forever.
+            if config.AI_REPEAT_CAP > 0 and rate_limit.count_in_window(
+                wazuh_receiver._ai_cap_key(rule_id, device_name),
+                config.AI_REPEAT_WINDOW_S,
+            ) >= config.AI_REPEAT_CAP:
+                db.update_it_recommendation(
+                    alert_id,
+                    "AI attempt limit reached for this rule on this device. "
+                    "See a recent alert of the same type for investigation steps.",
+                    provider_used="capped",
+                )
+                logger.info(
+                    "IT rec backfill: capped (alert_id=%s rule_id=%s device=%s)",
+                    alert_id, rule_id, device_name,
+                )
                 continue
             text, provider = it_recommender.recommend(
                 rule_id, alert.get("raw_alert") or "", device_name

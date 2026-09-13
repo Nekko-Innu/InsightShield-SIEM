@@ -8,6 +8,13 @@ reasoning. This one is the short path for *this* lab: the address, the agent
 names and the line-ending rules are all committed to `main`, so a clone lands
 ready to install and §2 is verification rather than patching.
 
+> **⚠ Port topology — this runbook's `8443` is stale.** Live state: the **Wazuh
+> dashboard keeps `443`**, **Insight Shield's nginx is on `8444`**. The tables
+> and steps below that say "dashboard → 8443, Insight Shield → 443" describe an
+> earlier plan; the scripts and the running box do the reverse. Canonical URLs:
+> Insight Shield `https://192.168.1.159:8444`, Wazuh dashboard
+> `https://192.168.1.159`. `sudo scripts/deploy.sh --verify` confirms the ports.
+
 ---
 
 ## 0. Pre-flight — what you have and what changes

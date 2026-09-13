@@ -162,6 +162,9 @@ current example. Adding an entry for one would be harmless but misleading.
 | 60122 (stock) | Failed login · Spoofing |
 | 60204 (stock) | Repeated failed logins · Spoofing |
 | 92900 (stock) | Credential dumping (LSASS) · Information disclosure |
+| 100099 | Credential dumping (LSASS) · Information disclosure |
+
+Note: 100099 shares 92900's label on purpose — same threat, so the dashboard, AI prompt, and report aggregate them as one category. 100099 is the mask-independent custom rule that catches procdump's `0x1FFFFF` open, which 92900's `(0x1010\|0x40)` substring filter misses.
 
 ¹ STRIDE has no reconnaissance category; "Information disclosure" is the closest fit.
 

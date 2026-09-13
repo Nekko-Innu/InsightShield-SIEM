@@ -118,8 +118,15 @@ the app restart is slow.
    from the environment on **every** boot — it does not live in the database.
 3. `sudo systemctl restart insightshield` (the web tier serves the webhook; the worker
    does not need restarting for this).
-4. Immediately update `<api_key>` in `ossec.conf` and
-   `sudo systemctl restart wazuh-manager`.
+4. Immediately re-sync the manager. The simplest way is `sudo scripts/install.sh`, which
+   copies `WAZUH_WEBHOOK_TOKEN` from `.env` into the `<api_key>` block (it does this only
+   when exactly one `<api_key>` exists) and restarts `wazuh-manager`. Or edit `<api_key>`
+   in `ossec.conf` by hand and `sudo systemctl restart wazuh-manager`.
+
+**Drift guard.** `scripts/deploy.sh` and `scripts/update.sh` both compare the `ossec.conf`
+token against `.env` and flag a mismatch — the failure mode where you rotate `.env`, restart
+the app, and forget the manager, after which every real alert is rejected while a manual
+`curl` (which reads `.env`) still returns 200.
 
 **What the gap looks like.** Between steps 3 and 4 the integrator logs a 403 per alert in
 `/var/ossec/logs/integrations.log`. Those alerts are **lost** — the integrator does not
@@ -274,6 +281,80 @@ services first; restoring under a running app races the WAL.
 
 > `/var/log/insightshield/app.log` **does not exist**, despite being named in at least one
 > script's failure hint. Use `error.log` in that directory, or the application log above.
+
+---
+
+## Deploying an update
+
+One command, run as root from the app tree, does the whole Ubuntu deploy and then
+verifies it:
+
+```bash
+cd /opt/insightshield/insightshield
+sudo scripts/deploy.sh
+```
+
+`deploy.sh` is a thin orchestrator over the two scripts that do the real work, in the
+order that matters:
+
+1. **`scripts/update.sh`** — app tier: `git pull --ff-only` (as the service user),
+   `pip install --require-hashes`, redeploy the nginx site (this is where 8444 lands),
+   re-apply the firewall, run the idempotent data migrations, restart both units.
+2. **`scripts/install.sh`** — rules + Wazuh: install `custom_retail_rules.xml` and the
+   integrator, re-sync the `<api_key>`, validate the ruleset with `wazuh-analysisd -t`,
+   restart `wazuh-manager`. This is the only script that touches the ruleset.
+
+Then `deploy.sh` **verifies**: ruleset compiles, deployed rules match the repo, rule count
+matches what the tests pin, the `ossec.conf` token matches `.env`, all four services are
+active, and a live webhook POST returns HTTP 200. Any failure is printed and the script
+exits non-zero.
+
+```bash
+sudo scripts/deploy.sh --verify   # run only the checks, change nothing
+sudo scripts/deploy.sh --app      # app tier only, skip the ruleset
+```
+
+**Local edits block the pull.** If the host tree has uncommitted changes,
+`git pull --ff-only` fails and `update.sh` stops. Back them up and discard before
+deploying: `sudo -u insightshield git -C /opt/insightshield/insightshield stash`,
+or `diff > patch` then `checkout --`. Never pipe a `git show` into `install`/`tee` over a
+live file — a failed command in that pipe once installed an empty ruleset.
+
+---
+
+## A rule is burning the AI quota
+
+A noisy rule that fires often (a false-positive LSASS or ARP detection, hourly) can spend
+the whole free-tier AI budget re-analysing the same alert: the manager translation, the
+static-retry, and the IT recommendation each run per row, and the recommendation prompt
+embeds the raw alert so its cache never hits on a repeat.
+
+Two controls, both in `.env` (see `config.py`):
+
+- **`AI_REPEAT_CAP`** (default 5) — max live AI attempts per `(rule_id, device)` per 24 h,
+  counted in `rate_events` so failures count too. Past the cap the pair falls back to the
+  static template and to reusing a sibling's recommendation; the alert is still stored,
+  notified, and shown. `0` disables the cap.
+- **`IT_REC_BACKFILL_MIN`** (default 10) — interval of the sweep that fills blank
+  recommendations. When the providers are exhausted, set it to `0` to stop the sweep from
+  burning quota retrying rows that keep failing, then restart the worker:
+  `sudo systemctl restart insightshield-worker`.
+
+To see which pair is spending the most, and how much is reused vs. blank:
+
+```bash
+sudo -u insightshield sqlite3 -header -column /opt/insightshield/insightshield/insightshield.db "
+SELECT rule_id, device_name, COUNT(*) n,
+  SUM(provider_used IS NOT NULL AND provider_used NOT IN ('cache','static')) live,
+  SUM(it_recommendation LIKE '(Reused from alert #%') reused,
+  SUM(it_recommendation IS NULL OR it_recommendation='AI_CHAIN_EXHAUSTED') blank
+FROM alerts WHERE severity IN ('HIGH','CRITICAL')
+  AND timestamp >= date('now','localtime','-7 day')
+GROUP BY rule_id, device_name HAVING n > 5 ORDER BY n DESC LIMIT 15;"
+```
+
+The real fix is always to tune the rule so it stops firing — the cap is the safety net, not
+the cure.
 
 ---
 

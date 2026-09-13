@@ -34,6 +34,7 @@ STOCK_PARENTS = {
     "60103", "60106", "60109", "60118", "60119", "60122", "60154",  # Windows security
     "61100", "61102", "61107", "61138", "61612",                    # Windows system, Sysmon 10
     "86601",                                # Suricata alert
+    "92205",                                # PowerShell exe creation (92800-sysmon; suppressed by 100096)
     "92900",                                # LSASS read (0945-sysmon_id_10.xml)
 }
 
@@ -56,7 +57,8 @@ def test_no_xml_declaration():
 
 
 def test_rule_count():
-    assert len(_rules()) == 34
+    # 31 custom (100xxx) + 3 stock overrides (7202/7204/7209) + 100096/100099/100100.
+    assert len(_rules()) == 37
 
 
 def test_mitm_rules_hang_off_arpwatch_not_sudo():
@@ -90,8 +92,10 @@ def test_every_parent_is_verified_stock_or_custom():
 
 def test_every_rule_has_a_parent():
     # A parentless custom rule sits behind Wazuh's own top-level Windows group
-    # rule, which matches first — it loads, but never fires.
-    assert [r.get("id") for r in _rules() if not _parents(r)] == []
+    # rule, which matches first — it loads, but never fires. if_group is a valid
+    # anchor too (100099 hangs off sysmon_event_10, exactly as stock 92900 does).
+    assert [r.get("id") for r in _rules()
+            if not _parents(r) and not r.findtext("if_group")] == []
 
 
 def test_no_rule_hides_its_alert():
@@ -169,10 +173,34 @@ def test_noise_suppressors_are_level_zero_and_nothing_else_is():
     # means a suppressor cannot feed if_matched_sid — which is why 100044 stays
     # at level 8 and its own alerts get bulk-resolved instead of silenced.
     suppressors = [r.get("id") for r in _rules() if r.get("level") == "0"]
-    assert suppressors == ["100090"], suppressors
+    assert suppressors == ["100090", "100100", "100096"], suppressors
     for r in _rules():
         if r.get("id") in suppressors:
             assert "insightshield_noise" in r.findtext("group"), r.get("id")
+
+
+def test_lsass_rule_negate_patterns_are_single_line():
+    # eventchannel field text includes the element's own whitespace, so a
+    # negate pattern split across lines with ^...$ anchors would never match —
+    # silently disabling 100099. Guard every field value against a stray newline.
+    r = next(x for x in _rules() if x.get("id") == "100099")
+    for f in r.iter("field"):
+        assert "\n" not in (f.text or ""), (f.get("name"), repr(f.text))
+        assert (f.text or "") == (f.text or "").strip(), f.get("name")
+
+
+def test_lsass_rule_catches_procdump_mask_and_skips_the_benign_ones():
+    # The whole point of 100099: fire on procdump's 0x1FFFFF, stay silent on the
+    # query-only masks that made 92900's substring match noisy.
+    import re
+    r = next(x for x in _rules() if x.get("id") == "100099")
+    mask_neg = next(f.text for f in r.iter("field")
+                    if f.get("name") == "win.eventdata.grantedAccess" and f.get("negate") == "yes")
+    p = re.compile(mask_neg)
+    assert not p.fullmatch("0x1fffff".upper()) and not p.fullmatch("0x1FFFFF")  # procdump -> fires
+    assert not p.fullmatch("0x1410") and not p.fullmatch("0x1010")             # read masks -> fire
+    for benign in ("0x1000", "0x100000", "0x101000"):
+        assert p.fullmatch(benign), benign                                    # query-only -> suppressed
 
 
 def test_every_rule_in_the_file_has_a_label_that_fits():
@@ -182,6 +210,28 @@ def test_every_rule_in_the_file_has_a_label_that_fits():
         label = wazuh_receiver._infer_attack_type(r.get("id"))
         assert label != "Unknown", r.get("id")
         assert len(label) <= 64, label  # attack_type's payload limit
+
+
+def test_ai_repeat_cap_stops_after_n_attempts_per_rule_and_device():
+    # A noisy rule firing hourly must not spend the free-tier budget on the same
+    # alert forever: the (rule, device) pair gets config.AI_REPEAT_CAP live AI
+    # slots per window, then falls back to static. A different device is its own
+    # budget. 0 disables the cap entirely.
+    import config
+    orig = config.AI_REPEAT_CAP
+    try:
+        config.AI_REPEAT_CAP = 3
+        # Unique ids so this test's rows never collide with another test's.
+        rule, dev_a, dev_b = "T-CAP-1", "capdev-A", "capdev-B"
+        assert [wazuh_receiver._ai_repeat_ok(rule, dev_a) for _ in range(5)] == \
+            [True, True, True, False, False]
+        # Second device untouched by the first's budget.
+        assert wazuh_receiver._ai_repeat_ok(rule, dev_b) is True
+        # 0 = disabled: always allowed.
+        config.AI_REPEAT_CAP = 0
+        assert all(wazuh_receiver._ai_repeat_ok(rule, dev_a) for _ in range(3))
+    finally:
+        config.AI_REPEAT_CAP = orig
 
 
 def test_mitm_rules_use_the_arp_template():
