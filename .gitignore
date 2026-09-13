@@ -42,3 +42,27 @@ pdf-samples/
 # OS
 Thumbs.db
 .DS_Store
+
+# ── Local-only working files — not part of the deployable project ────────────
+# Anything below is scratch, reference, or session output. It is useful while
+# working on this box but must not be in the repo others clone to install.
+
+# MemSearch plugin's local memory/index
+.memsearch/
+
+# Wazuh 4.8.2 upstream sources, pulled in only to read the rule-engine logic
+*_4.8.2.c
+# Stock Wazuh rule dump kept for lookups
+wazuh_rules.txt
+
+# Dashboard design mockups (not shipped; the real templates live in templates/)
+*-mock.html
+*-mock-proposed.html
+
+# Penetration-test outputs — raw scans, captured cookies, dumped pages.
+# Never publish: contains session data and is specific to one engagement.
+pentest_release/
+
+# Local diagnostic / incident write-ups kept on the host, not for distribution
+docs/Live DIagnosis.md
+docs/bugs and fixes.docx
