@@ -306,8 +306,9 @@ order that matters:
 
 Then `deploy.sh` **verifies**: ruleset compiles, deployed rules match the repo, rule count
 matches what the tests pin, the `ossec.conf` token matches `.env`, all four services are
-active, and a live webhook POST returns HTTP 200. Any failure is printed and the script
-exits non-zero.
+active, and a live webhook POST with the `.env` token is accepted. The probe is a level-1
+alert, which the receiver discards, so a deploy stores nothing and pages no one. Any
+failure is printed and the script exits non-zero.
 
 ```bash
 sudo scripts/deploy.sh --verify   # run only the checks, change nothing
@@ -319,6 +320,58 @@ sudo scripts/deploy.sh --app      # app tier only, skip the ruleset
 deploying: `sudo -u insightshield git -C /opt/insightshield/insightshield stash`,
 or `diff > patch` then `checkout --`. Never pipe a `git show` into `install`/`tee` over a
 live file — a failed command in that pipe once installed an empty ruleset.
+
+### Changing a detection rule
+
+Edit the repo, never `/var/ossec/etc/rules/` directly — `deploy.sh` fails check 4b when
+the deployed file differs from the checkout, and a host-only edit is lost on the next
+deploy.
+
+```bash
+# Dev machine
+python -m pytest tests/test_mitm_rules.py -q      # count, parents, patterns vs live field values
+git commit -am "rules: <what and why>" && git push
+
+# Wazuh host
+cd /opt/insightshield/insightshield
+sudo scripts/deploy.sh                            # pull, install, analysisd -t, restart, verify
+```
+
+A new rule changes the count pinned in `test_rule_count`; `deploy.sh` reads that number,
+so update the test in the same commit. Match Windows paths with `\\+` per separator —
+eventchannel fields arrive with doubled backslashes (see *Querying alerts from the shell*),
+and an anchored single-`\\` pattern silently never matches.
+
+---
+
+## Querying alerts from the shell
+
+```bash
+DB=/opt/insightshield/insightshield/insightshield.db
+sudo -u insightshield sqlite3 -header -column "$DB" <<'SQL'
+SELECT rule_id, device_name, COUNT(*) n, MAX(timestamp) last_seen
+FROM alerts
+WHERE timestamp >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '+8 hours', '-24 hours')
+GROUP BY rule_id, device_name ORDER BY n DESC;
+SQL
+```
+
+Four things that produced wrong answers during the 2026-09 triage:
+
+- **Time windows.** `alerts.timestamp` is ISO text with a `T` and `+08:00`.
+  `datetime('now', ...)` returns a *space*-separated value, and `'T' > ' '`, so every row
+  on the cutoff's date passes — a "last 24 hours" query returned 35-hour-old rows. Build
+  the bound with `strftime('%Y-%m-%dT%H:%M:%S', 'now', '+8 hours', ...)` as above
+  (independent of the host time zone). Day-granularity `date('now', ...)` is fine.
+- **Event fields.** `json_extract(raw_alert, '$.data.win.eventdata.<field>')`. Security
+  4688 (rule `100014`) names the parent `parentProcessName`; `parentImage` is the Sysmon
+  Event 1 name and comes back blank on 4688 rows. Sysmon Event 11 (`92213`) has no parent
+  at all — its `image` is the process that wrote the file.
+- **Backslashes.** Values print as `C:\\Windows\\...` because they *are* doubled in the
+  stored event. `LIKE '%cleanmgr.exe'` works; `= 'C:\Windows\System32\cleanmgr.exe'`
+  never matches.
+- **Host identity.** The POS VMs share one Windows computer name. Group by `device_name`
+  (the Wazuh agent name), never by `$.data.win.system.computer`.
 
 ---
 

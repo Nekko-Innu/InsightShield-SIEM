@@ -28,7 +28,7 @@ c_pass=$'\e[32m'; c_fail=$'\e[31m'; c_warn=$'\e[33m'; c_head=$'\e[36m'; c_off=$'
 pass() { printf "  ${c_pass}[PASS]${c_off} %s\n" "$1"; }
 fail() { printf "  ${c_fail}[FAIL]${c_off} %s\n" "$1"; FAIL=1; }
 warn() { printf "  ${c_warn}[WARN]${c_off} %s\n" "$1"; }
-head() { printf "\n${c_head}== %s ==${c_off}\n" "$1"; }
+section() { printf "\n${c_head}== %s ==${c_off}\n" "$1"; }
 die()  { printf "${c_fail}[FAIL]${c_off} %s\n" "$1"; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "must run as root (sudo $0)"
@@ -42,7 +42,7 @@ case "${1:-}" in
 esac
 
 # ── CATEGORY 1: preflight ────────────────────────────────────────────────────
-head "1. Preflight"
+section "1. Preflight"
 if [ -d "$APP/.git" ]; then
   pass "git checkout present at $APP"
 else
@@ -53,7 +53,7 @@ fi
 
 # ── CATEGORY 2: application tier ─────────────────────────────────────────────
 if [ "$MODE" != verify ]; then
-  head "2. Application tier (scripts/update.sh)"
+  section "2. Application tier (scripts/update.sh)"
   if [ -x "$APP/scripts/update.sh" ]; then
     "$APP/scripts/update.sh" || FAIL=1
   else
@@ -63,7 +63,7 @@ fi
 
 # ── CATEGORY 3: rules + Wazuh integration ────────────────────────────────────
 if [ "$MODE" = full ]; then
-  head "3. Rules + Wazuh integration (scripts/install.sh)"
+  section "3. Rules + Wazuh integration (scripts/install.sh)"
   # install.sh is the only script that installs the ruleset and restarts
   # wazuh-manager; run it after update.sh so the app is already current.
   if [ -x "$APP/scripts/install.sh" ]; then
@@ -74,7 +74,7 @@ if [ "$MODE" = full ]; then
 fi
 
 # ── CATEGORY 4: verification (always) ────────────────────────────────────────
-head "4. Verification"
+section "4. Verification"
 
 # 4a. Ruleset compiles.
 if [ -x /var/ossec/bin/wazuh-analysisd ]; then
@@ -98,7 +98,8 @@ fi
 
 # 4c. Rule count matches what the tests pin (guards a half-applied deploy).
 if [ -r "$DEPLOYED_RULES" ]; then
-  n="$(grep -c '<rule ' "$DEPLOYED_RULES" 2>/dev/null || echo 0)"
+  # grep -c prints 0 AND exits 1 on no match; "|| echo 0" made that "0\n0".
+  n="$(grep -c '<rule ' "$DEPLOYED_RULES" 2>/dev/null || true)"
   want="$(grep -oE 'len\(_rules\(\)\) == [0-9]+' "$APP/tests/test_mitm_rules.py" 2>/dev/null | grep -oE '[0-9]+$')"
   if [ -n "$want" ] && [ "$n" = "$want" ]; then
     pass "rule count = $n (matches test_rule_count)"
@@ -132,18 +133,25 @@ for unit in insightshield insightshield-worker wazuh-manager nginx; do
   fi
 done
 
-# 4f. Live webhook round-trip (real POST through gunicorn, using the .env token).
+# 4f. Live webhook round-trip through gunicorn with the .env token. Level 1 is
+#     below the storage floor: the request passes the allowlist, the token gate
+#     and validation, then process_alert discards it — nothing stored, nothing
+#     paged. The probe used to send a level-12 100001, which stored a HIGH
+#     "brute force" row (and a notification) on every deploy.
 if [ -r "$ENV_FILE" ]; then
   tok="$(grep -oP '(?<=^WAZUH_WEBHOOK_TOKEN=).*' "$ENV_FILE" 2>/dev/null | tr -d '\r')"
-  resp="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' -X POST \
+  body="$(curl -sS -m 5 -w '\n%{http_code}' -X POST \
             http://127.0.0.1:5000/wazuh-webhook \
             -H 'Content-Type: application/json' \
             -H "X-Webhook-Token: $tok" \
-            -d '{"rule_id":"100001","rule_level":12,"device_name":"DEPLOY-SELFTEST","description":"deploy.sh verification"}' 2>/dev/null)"
-  if [ "$resp" = 200 ]; then
-    pass "live webhook round-trip returned HTTP 200"
+            -d '{"rule_id":"0","rule_level":1,"device_name":"DEPLOY-SELFTEST","description":"deploy.sh verification"}' 2>/dev/null)"
+  code="${body##*$'\n'}"
+  if [ "$code" = 200 ] && printf '%s' "$body" | grep -q '"discarded"'; then
+    pass "live webhook accepted the .env token (level-1 probe discarded, nothing stored)"
+  elif [ "$code" = 403 ]; then
+    fail "live webhook returned 403 — .env token rejected; restart insightshield after editing .env"
   else
-    fail "live webhook returned HTTP $resp (expected 200) — token or app problem"
+    fail "live webhook returned HTTP ${code:-none} (expected 200 discarded) — 'journalctl -u insightshield -n 50'"
   fi
 fi
 

@@ -35,6 +35,7 @@ STOCK_PARENTS = {
     "61100", "61102", "61107", "61138", "61612",                    # Windows system, Sysmon 10
     "86601",                                # Suricata alert
     "92205",                                # PowerShell exe creation (92800-sysmon; suppressed by 100096)
+    "92212", "92213",                       # PowerShell archive, exe in user Temp (0830-sysmon_id_11.xml)
     "92900",                                # LSASS read (0945-sysmon_id_10.xml)
 }
 
@@ -57,8 +58,9 @@ def test_no_xml_declaration():
 
 
 def test_rule_count():
-    # 31 custom (100xxx) + 3 stock overrides (7202/7204/7209) + 100096/100099/100100.
-    assert len(_rules()) == 37
+    # 31 custom (100xxx) + 3 stock overrides (7202/7204/7209) + 100096/100099/100100
+    # + suppressors 100101/100102/100103. scripts/deploy.sh reads this number.
+    assert len(_rules()) == 40
 
 
 def test_mitm_rules_hang_off_arpwatch_not_sudo():
@@ -173,20 +175,98 @@ def test_noise_suppressors_are_level_zero_and_nothing_else_is():
     # means a suppressor cannot feed if_matched_sid — which is why 100044 stays
     # at level 8 and its own alerts get bulk-resolved instead of silenced.
     suppressors = [r.get("id") for r in _rules() if r.get("level") == "0"]
-    assert suppressors == ["100090", "100100", "100096"], suppressors
+    assert suppressors == ["100090", "100100", "100096", "100101", "100102", "100103"], suppressors
     for r in _rules():
         if r.get("id") in suppressors:
             assert "insightshield_noise" in r.findtext("group"), r.get("id")
 
 
-def test_lsass_rule_negate_patterns_are_single_line():
+def test_field_patterns_are_single_line():
     # eventchannel field text includes the element's own whitespace, so a
-    # negate pattern split across lines with ^...$ anchors would never match —
-    # silently disabling 100099. Guard every field value against a stray newline.
-    r = next(x for x in _rules() if x.get("id") == "100099")
-    for f in r.iter("field"):
-        assert "\n" not in (f.text or ""), (f.get("name"), repr(f.text))
-        assert (f.text or "") == (f.text or "").strip(), f.get("name")
+    # pattern split across lines with ^...$ anchors would never match —
+    # silently disabling the rule. Guard every field value in the file.
+    for r in _rules():
+        for f in r.iter("field"):
+            assert "\n" not in (f.text or ""), (r.get("id"), f.get("name"), repr(f.text))
+            assert (f.text or "") == (f.text or "").strip(), (r.get("id"), f.get("name"))
+
+
+def _fields(rid):
+    """{field name: compiled pattern} for one rule; negates keyed 'name!'."""
+    import re
+    r = next(x for x in _rules() if x.get("id") == rid)
+    return {f.get("name") + ("!" if f.get("negate") == "yes" else ""): re.compile(f.text)
+            for f in r.iter("field")}
+
+
+def _matches(rid, event):
+    # analysisd semantics for <field>: every positive must match, every negate
+    # must not. Missing field = no match.
+    for key, p in _fields(rid).items():
+        name, neg = key.rstrip("!"), key.endswith("!")
+        hit = name in event and bool(p.search(event[name]))
+        if hit == neg:
+            return False
+    return True
+
+
+# Field values exactly as json_extract() returned them from the live DB,
+# 2026-09-14: eventchannel doubles every backslash.
+_EV = "win.eventdata."
+
+
+def test_lsass_rule_excludes_the_wazuh_agent_as_the_field_really_arrives():
+    # The anchored single-backslash pattern never matched the doubled field:
+    # 100099 paged HIGH on every agent scan (POSsys1 11:28, POSsys3 11:50).
+    agent = r"C:\\Program Files (x86)\\ossec-agent\\wazuh-agent.exe"
+    base = {_EV + "targetImage": r"C:\\Windows\\system32\\lsass.exe", _EV + "grantedAccess": "0x1410"}
+    assert not _matches("100099", {**base, _EV + "sourceImage": agent})
+    # Same binary name anywhere else is still a dumper.
+    assert _matches("100099", {**base, _EV + "sourceImage": r"C:\\Users\\POS\\AppData\\Local\\Temp\\wazuh-agent.exe"})
+    assert _matches("100099", {**base, _EV + "sourceImage": r"C:\\Users\\POS\\AppData\\Local\\Temp\\procdump\\procdump64.exe",
+                               _EV + "grantedAccess": "0x1FFFFF"})
+
+
+def test_disk_cleanup_suppressors_match_cleanmgr_only():
+    guid = r"C:\\Users\\POS\\AppData\\Local\\Temp\\A61911AF-A947-49F2-B24D-5A9774E5ACBB\\"
+    cleanmgr_lower = r"C:\\Windows\\system32\\cleanmgr.exe"   # Sysmon 11 casing
+    cleanmgr_upper = r"C:\\Windows\\System32\\cleanmgr.exe"   # 4688 casing
+    ps = r"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+
+    # 100101 under 92213: cleanmgr's own drop is suppressed...
+    assert _matches("100101", {_EV + "image": cleanmgr_lower, _EV + "targetFilename": guid + "TransmogProvider.dll"})
+    # ...the same set written by PowerShell (DISM cmdlets, or a UAC-bypass plant) is not,
+    assert not _matches("100101", {_EV + "image": ps, _EV + "targetFilename": guid + "LogProvider.dll"})
+    # ...nor cleanmgr writing outside a GUID folder, nor a renamed cleanmgr.
+    assert not _matches("100101", {_EV + "image": cleanmgr_lower,
+                                   _EV + "targetFilename": r"C:\\Users\\POS\\AppData\\Local\\Temp\\procdump\\procdump64.exe"})
+    assert not _matches("100101", {_EV + "image": r"C:\\Users\\POS\\Desktop\\cleanmgr.exe",
+                                   _EV + "targetFilename": guid + "DismHost.exe"})
+
+    # 100102 under 100014: DismHost started by cleanmgr only.
+    assert _matches("100102", {_EV + "parentProcessName": cleanmgr_upper, _EV + "newProcessName": guid + "DismHost.exe"})
+    assert not _matches("100102", {_EV + "parentProcessName": ps, _EV + "newProcessName": guid + "DismHost.exe"})
+    assert not _matches("100102", {_EV + "parentProcessName": cleanmgr_upper, _EV + "newProcessName": guid + "evil.exe"})
+    # Defender's signature update also lands in 100014 but is not this rule's business.
+    assert not _matches("100102", {
+        _EV + "parentProcessName": r"C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\4.18.26080.3-0\\MpCmdRun.exe",
+        _EV + "newProcessName": r"C:\\Windows\\Temp\\52BA2E30-4CFE-41F0-B735-10199344C75FMpCommU\\mpam-d_bd_1.459.173.0.exe"})
+
+
+def test_powershell_policy_probe_suppressor_is_exact():
+    ps64 = r"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    ps32 = r"C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe"
+    for image, f in ((ps32, r"C:\\Windows\\SystemTemp\\__PSScriptPolicyTest_5raagwig.rar.ps1"),   # 92212, Manager
+                     (ps64, r"C:\\Users\\POS\\AppData\\Local\\Temp\\__PSScriptPolicyTest_emfa4ikm.fd1.ps1")):  # 92213
+        assert _matches("100103", {_EV + "image": image, _EV + "targetFilename": f}), f
+    # Real PowerShell drops under 92213 stay visible (procdump staging, 2026-09-12).
+    assert not _matches("100103", {_EV + "image": ps64,
+                                   _EV + "targetFilename": r"C:\\Users\\POS\\AppData\\Local\\Temp\\procdump\\procdump64.exe"})
+    # Probe-looking name from another writer, or a longer name, still alerts.
+    assert not _matches("100103", {_EV + "image": r"C:\\Users\\POS\\AppData\\Local\\Temp\\x\\powershell.exe",
+                                   _EV + "targetFilename": r"C:\\Users\\POS\\AppData\\Local\\Temp\\__PSScriptPolicyTest_abcd1234.zip.ps1"})
+    assert not _matches("100103", {_EV + "image": ps64,
+                                   _EV + "targetFilename": r"C:\\Users\\POS\\AppData\\Local\\Temp\\__PSScriptPolicyTest_payload-stage2.zip.ps1"})
 
 
 def test_lsass_rule_catches_procdump_mask_and_skips_the_benign_ones():

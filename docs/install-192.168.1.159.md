@@ -40,7 +40,7 @@ network.
 | Wazuh dashboard port | `https://192.168.1.159` (443) | **`https://192.168.1.159:8443`** |
 | Port 443 | Wazuh dashboard | nginx → Insight Shield |
 | `/var/ossec/etc/ossec.conf` | as-is | one `<ossec_config>` block appended (backup taken) |
-| `/var/ossec/etc/rules/` | stock | `+ custom_retail_rules.xml` (rule IDs 100001-100099, plus three stock arpwatch rules overwritten to level 3) |
+| `/var/ossec/etc/rules/` | stock | `+ custom_retail_rules.xml` (rule IDs 100001-100103, plus three stock arpwatch rules overwritten to level 3) |
 | `/var/ossec/integrations/` | stock | `+ custom-insightshield`, `+ custom-insightshield.py` |
 | ufw | probably inactive | enabled, default deny incoming |
 
