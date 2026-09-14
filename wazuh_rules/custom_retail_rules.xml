@@ -490,6 +490,58 @@
     <group>insightshield_noise,</group>
   </rule>
 
+  <!-- Paths in the three suppressors below use \\+ for every separator:
+       eventchannel fields carry them doubled ("C:\\Windows\\system32\\..."),
+       and a single \\ in an anchored pattern never matches (the 100099
+       wazuh-agent exclusion shipped that way and paged on every agent scan).
+       Writers and parents are pinned to their FULL path, so a copy of
+       cleanmgr.exe or powershell.exe run from anywhere else is not trusted. -->
+
+  <!-- Windows Disk Cleanup. cleanmgr.exe (SilentCleanup task, as the logged-on
+       user) unpacks the DISM runtime — 26 files, DismHost.exe and its provider
+       DLLs — into %TEMP%\<GUID>\ on every run, and stock 92213 raises one
+       CRITICAL per file. Live 2026-09-14: 26 on each of Manager, POSsys1 and
+       POSsys3 between 06:43 and 07:17.
+       Pinned to cleanmgr as the WRITER. The same file set written by any other
+       process still alerts: PowerShell's DISM cmdlets drop it too (benign
+       OpenSSH install on POSsys3, 2026-09-10), and planting a DLL in this
+       folder is a known UAC bypass. -->
+  <rule id="100101" level="0">
+    <if_sid>92213</if_sid>
+    <field name="win.eventdata.image" type="pcre2">(?i)^C:\\+Windows\\+System32\\+cleanmgr\.exe$</field>
+    <field name="win.eventdata.targetFilename" type="pcre2">(?i)\\+AppData\\+Local\\+Temp\\+[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\+[^\\]+$</field>
+    <description>Insight Shield: Windows Disk Cleanup unpacking its DISM helpers — routine</description>
+    <group>insightshield_noise,</group>
+  </rule>
+
+  <!-- The same cleanup run then starts DismHost.exe from that folder, and
+       100014 (program launched from Temp/AppData) raises a HIGH. Both the
+       parent (cleanmgr) and the child (DismHost.exe directly under a GUID
+       folder) must match; DismHost started by PowerShell or anything else still
+       alerts. -->
+  <rule id="100102" level="0">
+    <if_sid>100014</if_sid>
+    <field name="win.eventdata.parentProcessName" type="pcre2">(?i)^C:\\+Windows\\+System32\\+cleanmgr\.exe$</field>
+    <field name="win.eventdata.newProcessName" type="pcre2">(?i)\\+AppData\\+Local\\+Temp\\+[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\+DismHost\.exe$</field>
+    <description>Insight Shield: Windows Disk Cleanup starting its DISM helper — routine</description>
+    <group>insightshield_noise,</group>
+  </rule>
+
+  <!-- PowerShell's execution-policy probe. Each start writes
+       __PSScriptPolicyTest_<8 random>.<3 random>.ps1 to its temp folder and
+       deletes it. Random extensions containing .zip/.rar/.7z raise 92212
+       (Manager, SystemTemp, about twice a day); in a user's Temp the .ps1 raises
+       92213 (POSsys3). Exact 8.3 random name and a System32/SysWOW64
+       powershell.exe writer only — a payload merely named like the probe but
+       written by another process still alerts. -->
+  <rule id="100103" level="0">
+    <if_sid>92212,92213</if_sid>
+    <field name="win.eventdata.image" type="pcre2">(?i)^C:\\+Windows\\+(System32|SysWOW64)\\+WindowsPowerShell\\+v1\.0\\+powershell\.exe$</field>
+    <field name="win.eventdata.targetFilename" type="pcre2">(?i)\\+__PSScriptPolicyTest_[a-z0-9]{8}\.[a-z0-9]{3}\.ps1$</field>
+    <description>Insight Shield: PowerShell execution-policy self-test file — routine</description>
+    <group>insightshield_noise,</group>
+  </rule>
+
   <!-- LSASS credential dumping — broader than stock 92900, which requires the
        access mask to CONTAIN 0x1010 or 0x40. procdump -ma opens LSASS with
        0x1FFFFF (PROCESS_ALL_ACCESS), which contains neither, so 92900 stays
@@ -505,6 +557,9 @@
        - the Wazuh agent itself, matched on FULL PATH so a dumper renamed
          wazuh-agent.exe elsewhere is NOT trusted (it uses 0x1410/0x1fffff, the
          same read masks procdump does — only the path distinguishes it).
+         \\+ per separator: the field arrives as "C:\\Program Files (x86)\\...",
+         doubled, and the anchored single-\\ pattern this shipped with never
+         matched — every agent scan paged HIGH on all hosts (2026-09-14).
        Each <field> value is one line: eventchannel field text includes the
        element's whitespace, so a multi-line negate pattern with ^...$ anchors
        would never match and silently disable the rule. -->
@@ -512,7 +567,7 @@
     <if_group>sysmon_event_10</if_group>
     <field name="win.eventdata.targetImage" type="pcre2">(?i)\\lsass\.exe$</field>
     <field name="win.eventdata.grantedAccess" type="pcre2" negate="yes">^0x(1000|100000|101000)$</field>
-    <field name="win.eventdata.sourceImage" type="pcre2" negate="yes">(?i)(\\MsMpEng\.exe$|^C:\\Program Files \(x86\)\\ossec-agent\\wazuh-agent\.exe$)</field>
+    <field name="win.eventdata.sourceImage" type="pcre2" negate="yes">(?i)(\\MsMpEng\.exe$|^C:\\+Program Files \(x86\)\\+ossec-agent\\+wazuh-agent\.exe$)</field>
     <description>Insight Shield: LSASS accessed by $(win.eventdata.sourceImage) — credential dumping suspected</description>
     <group>insightshield_credential_access,lsass_access,</group>
     <mitre>
