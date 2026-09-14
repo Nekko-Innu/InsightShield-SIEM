@@ -124,8 +124,9 @@ to `"Unknown"`.
 
 Rules defined at **level 0** are absent from this table on purpose. `wazuh-analysisd`
 stops processing an event the moment a level-0 rule matches it, so the integrator never
-posts one and there is nothing to label — `100090` (Defender's own LSASS scan) is the
-current example. Adding an entry for one would be harmless but misleading.
+posts one and there is nothing to label — the noise suppressors `100090`, `100096`,
+`100100`–`100103` (group `insightshield_noise`) are all level 0. Adding an entry for one
+would be harmless but misleading.
 
 | Rule id | Attack type |
 |---|---|

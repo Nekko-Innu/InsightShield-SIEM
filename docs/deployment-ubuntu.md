@@ -364,15 +364,20 @@ firewall opens that one instead. The one value neither will accept is `443` —
 
 ### 4.1 Custom rules
 
+`scripts/install.sh` §7 installs the file, validates it and restarts the manager
+only if it compiles (rolling back otherwise). `sudo scripts/deploy.sh` runs it and
+then checks the result — use that. By hand, the equivalent is:
+
 ```bash
-sudo cp wazuh_rules/custom_retail_rules.xml /var/ossec/etc/rules/
-sudo chown root:wazuh /var/ossec/etc/rules/custom_retail_rules.xml
-sudo chmod 660 /var/ossec/etc/rules/custom_retail_rules.xml
-sudo /var/ossec/bin/wazuh-logtest -t     # must exit 0
-sudo systemctl restart wazuh-manager
+sudo install -o root -g wazuh -m 660 wazuh_rules/custom_retail_rules.xml /var/ossec/etc/rules/
+sudo /var/ossec/bin/wazuh-analysisd -t && sudo systemctl restart wazuh-manager
 ```
 
-Custom rules live in ids `100001`–`100099`, group `insightshield_retail`, plus
+`wazuh-analysisd -t`, not `wazuh-logtest -t`: logtest talks to the running
+analysisd over a socket, so it cannot validate a file the manager has not loaded
+yet. The `&&` keeps a ruleset that fails to compile from taking the manager down.
+
+Custom rules live in ids `100001`–`100103`, group `insightshield_retail`, plus
 three stock arpwatch rules (`7202`, `7204`, `7209`) overwritten to level 3. For
 the exact count, read `tests/test_mitm_rules.py::test_rule_count` — it is pinned
 there and fails when the file changes, which is why no number is repeated here.
@@ -456,7 +461,19 @@ the two in sync.
 Two rule groups need agent-side setup, or they can never fire:
 
 - **Sysmon** with the SwiftOnSecurity config — rule `100010` (POS RAM scraping)
-  keys on Sysmon Event 10 (ProcessAccess).
+  keys on Sysmon Event 10 (ProcessAccess), and so do `100099`/stock `92900`
+  (LSASS). Stock `92213` (executable dropped in Temp) needs Event 11. Three traps
+  from the field:
+  - The SwiftOnSecurity config ships `ProcessAccess` empty — add the `lsass.exe`
+    include shown under *Agent setup* below, or every LSASS rule stays silent.
+  - Keep the config somewhere persistent (`C:\ProgramData\sysmonconfig.xml`), not
+    `%TEMP%`, and use the same file on every host. Install:
+    `Sysmon64.exe -accepteula -i C:\ProgramData\sysmonconfig.xml`.
+  - The POS VMs are clones and share one Windows computer name. Identify a host by
+    its Wazuh agent name or IP, never by `$env:COMPUTERNAME` — a Sysmon check run
+    on the wrong clone once "proved" POSsys3 had no Sysmon. Per host, confirm:
+    `(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Sysmon/Operational'; Id=10; StartTime=(Get-Date).AddHours(-1)}).Count`
+    is non-zero.
 - **File integrity monitoring** — rules `100011`, `100012`, `100044`–`100047`
   need a `<syscheck>` block watching `C:\POS\shared` in realtime or at
   `<frequency>30</frequency>`.
