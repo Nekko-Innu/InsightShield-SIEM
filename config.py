@@ -42,10 +42,7 @@ GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
 # Off also hides the Gmail card and the IT-admin-email field in Settings.
 # EMAIL_ENABLED=1 in .env restores both; the stored credentials are untouched.
 EMAIL_ENABLED = os.environ.get("EMAIL_ENABLED", "").lower() in ("1", "true", "yes")
-# Contact-record fields only (SMS channel retired Round J) — no longer read
-# by any dispatch path; kept for the Notification Recipients settings card.
-MANAGER_PHONE       = os.environ.get("MANAGER_PHONE",  "")
-IT_ADMIN_PHONE      = os.environ.get("IT_ADMIN_PHONE", "")
+# Recipient of alert emails; edited in the Gmail settings card.
 IT_ADMIN_EMAIL      = os.environ.get("IT_ADMIN_EMAIL", "")
 # ── Flask session signing key ────────────────────────────────────────────────
 # Fail loud, the same way crypto_utils.get_master_key() does for ENCRYPTION_KEY.

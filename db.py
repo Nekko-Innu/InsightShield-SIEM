@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 # Bootstrap logic: see bootstrap_settings_from_env. Round 3 makes this table
 # the runtime source of truth for plain-text non-secret config (sender names,
-# phone numbers, chat IDs, recipient emails, Wazuh URL/user).
+# chat IDs, recipient emails, Wazuh URL/user).
 CREATE_SETTINGS_SQL = """
 CREATE TABLE IF NOT EXISTS settings (
     key        TEXT PRIMARY KEY,
@@ -1702,10 +1702,12 @@ def get_service_completeness() -> dict[str, str]:
                     and _has(get_setting("telegram_manager_chat_id"))
         else "offline"
     )
-    # Gmail SMTP — app password + from-address
+    # Gmail SMTP — app password + from-address + recipient (notifier skips
+    # every email while it_admin_email is empty)
     out["gmail"] = (
         "online" if _has(get_api_key("gmail", "APP_PASSWORD"))
                     and _has(get_setting("gmail_address"))
+                    and _has(get_setting("it_admin_email"))
         else "offline"
     )
     # Wazuh API — password + url + user (3-tuple)
@@ -1713,18 +1715,6 @@ def get_service_completeness() -> dict[str, str]:
         "online" if _has(get_api_key("wazuh", "PASSWORD"))
                     and _has(get_setting("wazuh_api_url"))
                     and _has(get_setting("wazuh_api_user"))
-        else "offline"
-    )
-    # Notification Recipients — pointers, not a service. No live probe makes
-    # sense (you can't "test" a phone number). Status reflects whether the
-    # required pointers are populated; the recipients card uses test_allowed=False
-    # so the macro suppresses the Test button. The email pointer is required only
-    # while EMAIL_ENABLED — the card hides that field when it is off, and a dot
-    # stuck on "offline" for a field you cannot see is unfixable.
-    out["recipients"] = (
-        "online" if _has(get_setting("manager_phone"))
-                    and _has(get_setting("it_admin_phone"))
-                    and (not config.EMAIL_ENABLED or _has(get_setting("it_admin_email")))
         else "offline"
     )
     return out
@@ -2020,8 +2010,6 @@ def bootstrap_settings_from_env() -> None:
         _bootstrap_setting("telegram_it_chat_id",       config.TELEGRAM_CHAT_ID)
         _bootstrap_setting("telegram_manager_chat_id",  config.TELEGRAM_MANAGER_CHAT_ID)
         _bootstrap_setting("gmail_address",             config.GMAIL_ADDRESS)
-        _bootstrap_setting("manager_phone",             config.MANAGER_PHONE)
-        _bootstrap_setting("it_admin_phone",            config.IT_ADMIN_PHONE)
         _bootstrap_setting("it_admin_email",            config.IT_ADMIN_EMAIL)
         _bootstrap_setting("wazuh_api_url",             config.WAZUH_API_URL)
         _bootstrap_setting("wazuh_api_user",            config.WAZUH_API_USER)
