@@ -490,6 +490,35 @@ Three namespaces, each a `dict[str, dict]` guarded by a single `threading.Lock`:
 
 Per-entry shape: `{"text": str, "ts": float, "hits": int}`. TTL is `cache.TTL = 3600` seconds; entries are evicted lazily on read after expiry. `get_stats()` returns counts per namespace for the IT-only `/api/cache-stats` endpoint.
 
+### 6.7 Static manager templates (`groq_translator.STATIC_TEMPLATES`)
+
+The manager text falls back to a pre-written template far more often than "AI outage" suggests, and that text is also the Telegram and email body (`notifier.py` sends `plain_text`; routing runs right after storage, before any background retry rewrites the row). Static text is used when:
+
+- severity is below `config.AI_ENABLED_SEVERITIES` (`HIGH`, `CRITICAL`) — every MEDIUM/LOW/INFORMATIONAL alert, always;
+- `config.AI_REPEAT_CAP` (5 per rule and device per 24 h) is spent — the 6th repeat onward of any burst;
+- the chain misses inside `config.AI_INGEST_BUDGET_S` (5 s).
+
+`RULE_TO_TEMPLATE.get(rule_id, "generic")` picks the text. A rule is mapped only when the template describes it; everything else gets `generic`, which states only that something was flagged.
+
+| Template | Rules | Says |
+|----------|-------|------|
+| `lsass_dump` | 92900, 100099 | Saved passwords read from memory; change passwords from another computer |
+| `pos_ram_scraping` | 100010 | Card data read from the payment software; stop card payments on the terminal |
+| `rdp_bruteforce` | 60122, 60204, 100001 | Many wrong-password logins |
+| `syn_flood` | 100031, 100040, 100041 | Unusually large network traffic; use manual receipts if the POS is slow |
+| `arp_mitm` | 100020–100023, 7202, 7204, 7209 | Suspicious device on the network; stop logins and payments |
+| `ransomware` | 100045, 100046, 100047 | Shared POS folder files changing fast, may be ransomware; unplug the network cable |
+| `generic` | everything else | Unusual activity, not identified yet; report to the branch manager and IT |
+
+Constraints, pinned by `tests/test_mitm_rules.py`:
+
+- 100010 was mapped to `lsass_dump` until 2026-09-16, so a card-theft alert told the cashier to change passwords. It now has its own template, and the test asserts the text never mentions passwords.
+- **100044 is deliberately unmapped.** It is one ordinary file save in `C:\POS\shared` (level 8, MEDIUM — always static, sent to IT Telegram, escalated after hours). Mapping it to `ransomware` would page "ransomware" on routine saves.
+- The `ransomware` text says "may be": 100046 also fires on a legitimate bulk copy into the shared folder.
+- Every template contains `{device}` and passes `validator.validate_manager_translation`, the same structure, word-count and forbidden-word rules applied to AI output.
+
+Known gaps, not yet changed: `arp_mitm` covers 100022, a never-seen device (a phone joining Wi-Fi also triggers it), and manager-side rules (100020–100022, 100040, 100041) fill `{device}` with the Wazuh host name rather than the target.
+
 ---
 
 ## 7. NOTIFICATION & ALERT ROUTING
@@ -1678,7 +1707,7 @@ All 13 gates green at Round I sign-off on 2026-05-12.
 
 Two pre-existing bugs surfaced during Round I's diagnostic work. Neither was caused by Round I; both are flagged here so future maintenance picks them up:
 
-1. **`RULE_TO_TEMPLATE` static-fallback mapping drift** in `groq_translator.py:81-92`. Rule_id `100020` (ARP Spoofing) maps to `wifi` template (should be `arp_mitm`). Rule_id `100030` (Bulk File Rename) maps to `arp_mitm` (no good template — this is ransomware-adjacent). Rule_id `ISH-CBF-001` (Round E credential brute-force) has no entry and falls through to the default `rdp_bruteforce`. Only matters when the AI chain exhausts; with AI working (primary path), users see AI's dynamic output regardless of rule_id. Future cleanup round should reconcile the static-template map with the v1.4 rule taxonomy.
+1. **`RULE_TO_TEMPLATE` static-fallback mapping drift** in `groq_translator.py:81-92`. Rule_id `100020` (ARP Spoofing) maps to `wifi` template (should be `arp_mitm`). Rule_id `100030` (Bulk File Rename) maps to `arp_mitm` (no good template — this is ransomware-adjacent). Rule_id `ISH-CBF-001` (Round E credential brute-force) has no entry and falls through to the default `rdp_bruteforce`. Only matters when the AI chain exhausts; with AI working (primary path), users see AI's dynamic output regardless of rule_id. Future cleanup round should reconcile the static-template map with the v1.4 rule taxonomy. *(Superseded: the map was rebuilt against the current rule IDs; `wifi` and `ISH-CBF-001` no longer appear, unmapped rules default to `generic`, and 100010 / 100045–100047 gained their own templates on 2026-09-16 — see §6.7.)*
 
 2. **Round E credential_brute_force alerts have NULL `it_recommendation`**. The brute-force escalation path in `app.py` builds the alert row directly and calls `alert_router.dispatch` — it does NOT go through `wazuh_receiver.process_alert()`, which is the only path that spawns the fire-and-forget IT recommender thread. Consequence: every credential_brute_force alert has NULL `it_recommendation` and alert detail shows the "Generating investigation steps… refresh in a few seconds" placeholder forever. Round I backfilled alert id=8 via a one-off diagnostic Python call; future brute-force alerts will repeat the issue until the brute-force path is patched.
 

@@ -192,7 +192,10 @@ database-watermark poll so every worker sees every alert; three tables replacing
 in-memory state; the scheduler moved into its own process. Then a security round closing six
 defects found by live testing — logout leaving a valid cookie behind, an idle timeout that could
 never fire, raw decoder payloads reaching managers through the audit report, an unbounded event
-stream, and a login timing side-channel that revealed which usernames exist.
+stream, and a login timing side-channel that revealed which usernames exist. Since then (September
+2026): the unread phone-number settings are gone and the IT admin email lives in the Gmail card, and
+POS memory-scraping and ransomware alerts carry their own plain-language fallback text — the
+memory-scraping alert used to tell cashiers to change passwords.
 
 | Round | What landed |
 |-------|-------------|
