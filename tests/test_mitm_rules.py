@@ -319,6 +319,33 @@ def test_mitm_rules_use_the_arp_template():
         assert groq_translator.RULE_TO_TEMPLATE[rid] == "arp_mitm"
 
 
+def test_pos_ram_scraping_fallback_is_card_theft_not_passwords():
+    # 100010 is card-data theft from the POS process, not LSASS; the lsass_dump
+    # text told the cashier to change passwords.
+    text = groq_translator._get_static_template("100010", "POSsys1")
+    assert "card" in text and "POSsys1" in text
+    assert "password" not in text.lower()
+
+
+def test_ransomware_fallback_covers_the_chain_but_not_a_single_file_change():
+    for rid in ("100045", "100046", "100047"):
+        assert groq_translator.RULE_TO_TEMPLATE[rid] == "ransomware", rid
+    # 100044 is one ordinary save in the shared folder: MEDIUM, always static,
+    # sent to Telegram. It must never read as ransomware.
+    assert "100044" not in groq_translator.RULE_TO_TEMPLATE
+
+
+def test_every_template_names_the_device_and_passes_the_manager_validator():
+    # Static text reaches the same Telegram/email body as AI text, so it gets
+    # held to the same structure, word-count and forbidden-word rules.
+    import validator
+    for key, text in groq_translator.STATIC_TEMPLATES.items():
+        assert "{device}" in text, key
+        assert validator.validate_manager_translation(text.replace("{device}", "POSsys1")), key
+    for key in set(groq_translator.RULE_TO_TEMPLATE.values()):
+        assert key in groq_translator.STATIC_TEMPLATES, key
+
+
 def test_stock_ids_that_are_not_attacks_stay_unlabelled():
     # sudo, pfSense drop, logon success, web SQLi, FIM file added
     for rid in ("5402", "87701", "60106", "31152", "554"):

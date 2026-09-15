@@ -85,6 +85,24 @@ STATIC_TEMPLATES = {
         "WHAT TO DO: Stop any logins or payment transactions. Notify your "
         "manager and IT immediately. Check nearby devices too."
     ),
+    # 100010: card data read out of the POS process. Not lsass_dump — that
+    # text sent a cashier to change passwords while card theft went on.
+    "pos_ram_scraping": (
+        "WHAT HAPPENED: A program read the memory of the payment software on {device}.\n"
+        "HOW SERIOUS: This is how card-skimming malware steals customer card numbers.\n"
+        "WHAT TO DO: Stop taking card payments on this terminal. Do not turn it off. "
+        "Call IT now."
+    ),
+    # 100045-100047 only. "May be": 100046 also fires on a legitimate bulk copy.
+    # Never 100044 — one ordinary file save (MEDIUM, always static, sent to
+    # Telegram) would page "ransomware".
+    "ransomware": (
+        "WHAT HAPPENED: Files in the shared POS folder on {device} are changing fast, "
+        "the way ransomware locks files.\n"
+        "HOW SERIOUS: This may be ransomware. It can spread to other computers.\n"
+        "WHAT TO DO: Unplug this computer's network cable. Do not turn it off. "
+        "Do not pay anything. Call IT now."
+    ),
     # Default for any rule_id not in RULE_TO_TEMPLATE. Says only what is
     # actually known — that something was flagged — instead of asserting a
     # specific attack the app cannot identify.
@@ -99,10 +117,14 @@ STATIC_TEMPLATES = {
 
 # rule_id -> template key. Only rules the template actually describes; the rest
 # (after-hours admin, new account, POS file changes, new service, service
-# crash, ransomware, port scan) get "generic" rather than a wrong story — a new
-# user account used to read as a failed-login attempt.
+# crash, port scan, the 100044 single-file change) get "generic" rather than a
+# wrong story — a new user account used to read as a failed-login attempt.
+# This text is not a rare fallback: every sub-HIGH alert, every repeat past
+# AI_REPEAT_CAP and every inline AI miss uses it, and it is the Telegram/email body.
 RULE_TO_TEMPLATE = {
-    "100010": "lsass_dump", "92900": "lsass_dump", "100099": "lsass_dump",
+    "92900": "lsass_dump", "100099": "lsass_dump",
+    "100010": "pos_ram_scraping",
+    "100045": "ransomware", "100046": "ransomware", "100047": "ransomware",
     "60122": "rdp_bruteforce", "60204": "rdp_bruteforce", "100001": "rdp_bruteforce",
     "100031": "syn_flood", "100040": "syn_flood", "100041": "syn_flood",
     "100020": "arp_mitm", "100021": "arp_mitm", "100022": "arp_mitm", "100023": "arp_mitm",
