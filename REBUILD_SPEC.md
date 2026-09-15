@@ -5,7 +5,7 @@ This document is the master spec for the Insight Shield rebuild from WatchPost. 
 > **Standing directives** (override the literal text of any spec section below):
 >
 > - **No emoji, no Unicode glyph icons.** Dots use the `.dot` CSS class with `var(--TOKEN)` colors from `static/design-tokens.css`. Icons use Heroicons inline-SVG via the `templates/_icon.html` macro. Never Tailwind utility classes (`rounded-full bg-rose-500`) for status colors — they bypass design-tokens.css.
-> - **Two phone numbers.** `MANAGER_PHONE` is the actual manager's phone; `IT_ADMIN_PHONE` is the IT admin's phone. Contact-record fields in Notification Recipients only as of Round J (2026-07-29) — neither `alert_router` nor `notifier` reads them for dispatch since the SMS channel was retired; see Part 23.
+> - **No phone numbers.** `MANAGER_PHONE` / `IT_ADMIN_PHONE` were contact-record fields after the SMS channel was retired in Round J (2026-07-29; see Part 23), read by no dispatch path. Removed 2026-09-15 along with the Notification Recipients card. `IT_ADMIN_EMAIL` (email alert recipient, read by `notifier.send_email`) now lives in the Gmail SMTP card.
 > - **GitHub remote.** `https://github.com/Nekko-Innu/InsightShield-SIEM-Dashboard.git`.
 
 ---
@@ -64,11 +64,10 @@ This document is the master spec for the Insight Shield rebuild from WatchPost. 
   1. **AI Providers** — **dynamic add/remove/reorder** list. Each row stores label, model, base_url, encrypted api_key, auth_header, auth_prefix, request_format, is_active, position. Reorder via up/down arrows; toggle active/inactive. Pre-built templates dropdown (Groq, OpenAI, Gemini, DeepSeek, Anthropic, OpenRouter, Custom) auto-fills base_url + auth fields — see `config.PROVIDER_TEMPLATES` shipped in Round 2. The chain runner (`_ai_chain.run_chain`) was written in Round 2 to consume an opaque `providers: list[dict]`; Round 3 just swaps the source from `config.DEFAULT_AI_PROVIDERS` to `db.get_active_providers_ordered()`.
   2. **Telegram – IT Group** — Bot token (encrypted) + Chat ID (plain text).
   3. **Telegram – Manager** — Bot token (encrypted) + Chat ID (plain text).
-  4. **Gmail SMTP** — Email address (plain text) + App Password (encrypted).
-  5. **Notification Recipients** — Manager Phone Number (plain text), IT Admin Phone Number (plain text), IT Admin Email (plain text). Two distinct phones.
-  6. **Wazuh API** — URL, Username (plain text) + Password (encrypted).
+  4. **Gmail SMTP** — From address (plain text) + App Password (encrypted) + IT Admin Email recipient (plain text). Hidden while `EMAIL_ENABLED` is off.
+  5. **Wazuh API** — URL, Username (plain text) + Password (encrypted).
 
-  > SMS Gateway (Semaphore PH) sub-section removed in Round J (2026-07-29) — see Part 23. Phone numbers remain in Notification Recipients for contact-record purposes only; they no longer drive any dispatch path.
+  > SMS Gateway (Semaphore PH) sub-section removed in Round J (2026-07-29) — see Part 23. Notification Recipients (Manager Phone, IT Admin Phone, IT Admin Email) removed 2026-09-15: the phones drove no dispatch path, and IT Admin Email moved into Gmail SMTP.
 - Encryption: `cryptography.fernet.Fernet`. Master key in `.env` as `ENCRYPTION_KEY`. Fail loud at startup if missing or invalid.
 - Bootstrap: on first boot when both `api_keys` and `settings` are empty, populate from `.env` once. After that, the app reads from the DB; `.env` is only used for `FLASK_SECRET_KEY` and `ENCRYPTION_KEY`.
 - All Settings POSTs logged to `audit_log` (encrypted values logged as `(encrypted, last4=XXXX)` only).
@@ -681,7 +680,7 @@ Round J removes the SMS notification channel entirely. Telegram (IT group + Mana
 - `db.py` `get_service_completeness` — drop the `semaphore` service key.
 - `api_keys` table — existing `service='semaphore'` rows (API key) are orphaned data, not actively read. No migration framework, so no automated cleanup; a manual `DELETE FROM api_keys WHERE service='semaphore'` is optional housekeeping, not required for correctness.
 - `alert_router.py` — the `credential_brute_force` HIGH-alert escalation path (Round E) now dispatches Telegram + Email only, no SMS leg.
-- `MANAGER_PHONE` / `IT_ADMIN_PHONE` — remain in the Notification Recipients settings sub-section as contact-record fields (still displayed, still editable) but are no longer read by any dispatch path. Standing directive at the top of this file updated to reflect this.
+- `MANAGER_PHONE` / `IT_ADMIN_PHONE` — remain in the Notification Recipients settings sub-section as contact-record fields (still displayed, still editable) but are no longer read by any dispatch path. Standing directive at the top of this file updated to reflect this. *(Superseded 2026-09-15: phone fields and the Notification Recipients card removed; IT Admin Email moved to the Gmail SMTP card.)*
 - `config.PROVIDER_TEMPLATES` and `config.DEFAULT_AI_PROVIDERS` are untouched — this round does not touch the AI provider chain, only the non-AI notification service list.
 - Docs updated in the same round: `DEPLOYMENT.md` (drop Semaphore prereq row + `.env` seed block), `SYSTEM_DESIGN.md` (drop SMS from architecture diagram, tech stack, routing matrix, KPI table, rate-limit buckets, protected-decisions table, §7.6 SMS templates section).
 
@@ -692,7 +691,7 @@ Round J removes the SMS notification channel entirely. Telegram (IT group + Mana
 - [x] `/admin/settings?tab=service` shows exactly 4 service cards: Telegram IT, Telegram Manager, Gmail, Wazuh — no SMS Gateway card
 - [x] IT dashboard KPI strip renders 4 cards unconditionally — no SMS credits card, no layout gap
 - [x] `credential_brute_force` HIGH alert (Round E throttle escalation) still reaches Telegram + Email with SMS leg absent — no exception raised by a missing `send_sms` call site
-- [x] Notification Recipients sub-section still shows Manager Phone / IT Admin Phone / IT Admin Email fields (contact-record only) and still saves correctly
+- [x] Notification Recipients sub-section still shows Manager Phone / IT Admin Phone / IT Admin Email fields (contact-record only) and still saves correctly *(Superseded 2026-09-15: phone fields and the Notification Recipients card removed; IT Admin Email moved to the Gmail SMTP card.)*
 - [x] No regression on `/dashboard/it`, `/dashboard/manager`, `/report`, `/admin/settings?tab=ai-providers` — AI provider chain unaffected (9/9 pytest suite green, 2026-07-30)
 
 ---

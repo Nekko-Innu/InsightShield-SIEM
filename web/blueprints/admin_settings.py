@@ -92,7 +92,7 @@ def admin_settings():
     settings_kv = {}
     for key in (
         "telegram_it_chat_id", "telegram_manager_chat_id",
-        "gmail_address", "manager_phone", "it_admin_phone", "it_admin_email",
+        "gmail_address", "it_admin_email",
         "wazuh_api_url", "wazuh_api_user", "alert_focus_mode",
     ):
         settings_kv[key] = db.get_setting(key)
@@ -402,8 +402,6 @@ _SETTINGS_WRITE_ALLOWLIST = {
     "telegram_it_chat_id",
     "telegram_manager_chat_id",
     "gmail_address",
-    "manager_phone",
-    "it_admin_phone",
     "it_admin_email",
     "wazuh_api_url",
     "wazuh_api_user",

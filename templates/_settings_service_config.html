@@ -1,12 +1,12 @@
 {# Round 3 — Service Configuration sub-sections.
-   Included by settings.html when ?tab=service. Six cards, one per
-   external-service category (SMS Gateway/Semaphore card removed Round J).
+   Included by settings.html when ?tab=service. Five cards, one per
+   external-service category (SMS Gateway/Semaphore card removed Round J;
+   Notification Recipients removed 2026-09-15, IT admin email now in Gmail).
 
-   Round F redesign (§17): 4 of 6 cards (Telegram x2, Gmail, Wazuh)
+   Round F redesign (§17): 4 of 5 cards (Telegram x2, Gmail, Wazuh)
    moved to the new layout — status row + masked summary + actions row +
-   Edit modal. The two unchanged cards are AI Providers (richer toggle
-   exists already; out of scope per §17.4) and Notification Recipients
-   (no service to test or toggle; just pointers). Encrypted credential
+   Edit modal. The unchanged card is AI Providers (richer toggle
+   exists already; out of scope per §17.4). Encrypted credential
    storage and the existing per-service POST endpoints are unchanged —
    the new Edit modal posts to those same routes.
 #}
@@ -390,6 +390,7 @@
     summary_pairs=[
       ('From', settings_kv.get('gmail_address')),
       ('App password', masked_value(api_keys.get(('gmail','APP_PASSWORD'))) | string | trim),
+      ('To', settings_kv.get('it_admin_email')),
     ],
     fields=[
       {
@@ -407,6 +408,14 @@
         "current_set": api_keys.get(('gmail','APP_PASSWORD')) is not none,
         "reveal_endpoint": url_for('admin_settings.admin_settings_reveal_api_key', service='gmail'),
         "hint": "Generate at myaccount.google.com → Security → 2FA → App passwords."
+      },
+      {
+        "name": "value", "label": "IT admin email", "type": "text",
+        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='it_admin_email'),
+        "extra": {},
+        "current_value": settings_kv.get('it_admin_email') or '',
+        "placeholder": "admin@yourcompany.com",
+        "hint": "Recipient of HIGH/CRITICAL alert emails."
       },
     ],
     toggle_allowed=false
@@ -450,49 +459,6 @@
       },
     ],
     toggle_allowed=false
-) }}
-
-{# ─────────── 6. Notification Recipients — Round F redesign ─────────── #}
-{# Pointers, not a service — there is no live probe to run, so the macro
-   is invoked with test_allowed=false to suppress the Test button. Status
-   dot reflects whether the required recipient pointers are populated
-   (manager_phone, it_admin_phone, plus it_admin_email while email_enabled). Moved to the bottom
-   of the section list so the testable services (1-5) cluster together. #}
-{{ service_card(
-    svc_key='recipients',
-    label='Notification Recipients',
-    subtitle='Contact-record phone numbers only — SMS channel retired Round J, no longer read by any dispatch path.',
-    summary_pairs=[
-      ('Manager phone', settings_kv.get('manager_phone')),
-      ('IT admin phone', settings_kv.get('it_admin_phone')),
-    ] + ([('IT admin email', settings_kv.get('it_admin_email'))] if email_enabled else []),
-    fields=[
-      {
-        "name": "value", "label": "Manager phone", "type": "text",
-        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='manager_phone'),
-        "extra": {},
-        "current_value": settings_kv.get('manager_phone') or '',
-        "placeholder": "+639XXXXXXXXX",
-        "hint": ""
-      },
-      {
-        "name": "value", "label": "IT admin phone", "type": "text",
-        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='it_admin_phone'),
-        "extra": {},
-        "current_value": settings_kv.get('it_admin_phone') or '',
-        "placeholder": "+639XXXXXXXXX",
-        "hint": "Contact record only — SMS channel retired Round J."
-      },
-    ] + ([{
-        "name": "value", "label": "IT admin email", "type": "text",
-        "endpoint": url_for('admin_settings.admin_settings_set_setting', key='it_admin_email'),
-        "extra": {},
-        "current_value": settings_kv.get('it_admin_email') or '',
-        "placeholder": "admin@yourcompany.com",
-        "hint": ""
-      }] if email_enabled else []),
-    toggle_allowed=false,
-    test_allowed=false
 ) }}
 
 {# Round F §17 — shared Edit modal. Single instance for the whole tab,

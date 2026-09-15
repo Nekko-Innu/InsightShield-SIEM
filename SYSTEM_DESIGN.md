@@ -366,18 +366,17 @@ A sentinel row (`settings.key = 'bootstrap_complete'`, `value = '1'`) is set las
 
 IT_ADMIN-only (Round 8 decorator). Vertical tabs at the left: **Service Configuration | Audit Log | Backups | Errors**. `templates/settings.html` whitelists `('service', 'audit', 'backups', 'errors')`; the Errors tab is served by `web/blueprints/admin_settings.py` off the `error_log` table and shows backend exceptions and browser-side error beacons together. The right panel uses Jinja `include` to render `audit.html` and `backups.html` as inner partials — Round 3 collapsed the standalone `/admin/audit` and `/admin/backup` routes into `/admin/settings?tab=audit|backups` 302 redirects to keep one UI surface.
 
-Service Configuration contains seven sub-sections, each with its own Save button:
+Service Configuration contains five sub-sections, each with its own Save button:
 
 | Sub-section                  | Stored in       | Encrypted? |
 |------------------------------|-----------------|------------|
 | 1. AI Providers              | `ai_providers`  | Per-row API key encrypted; everything else plain |
 | 2. Telegram – IT Group       | `api_keys`      | Bot token encrypted; Chat ID in `settings` |
 | 3. Telegram – Manager        | `api_keys`      | Bot token encrypted; Chat ID in `settings` |
-| 4. Gmail SMTP                | `api_keys`      | App password encrypted; Email in `settings` |
-| 5. Notification Recipients   | `settings`      | Manager Phone, IT Phone, IT Email — plain, contact-record only (Round J) |
-| 6. Wazuh API                 | `settings`+`api_keys` | URL/User plain; Password encrypted |
+| 4. Gmail SMTP                | `api_keys`      | App password encrypted; From address and IT admin email (recipient) in `settings`. Hidden while `EMAIL_ENABLED` is off |
+| 5. Wazuh API                 | `settings`+`api_keys` | URL/User plain; Password encrypted |
 
-> SMS Gateway (Semaphore) sub-section removed in Round J (2026-07-29).
+> SMS Gateway (Semaphore) sub-section removed in Round J (2026-07-29). Notification Recipients removed 2026-09-15 — Manager/IT phones were read by no dispatch path; IT admin email moved into Gmail SMTP, whose status dot now also requires it.
 
 The AI Providers sub-section supports add / remove / reorder via up/down arrows, an Active toggle, and a Pre-built Templates dropdown sourced from `config.PROVIDER_TEMPLATES` (Groq, OpenAI, Gemini, DeepSeek, Anthropic, OpenRouter, Custom). Selecting a template auto-fills `base_url`, `auth_header`, `auth_prefix`, and `request_format` so the operator only enters a label and API key.
 
@@ -1730,7 +1729,7 @@ Plus a third — non-bug-but-noteworthy — observation: the Groq API response f
 
 **Data note**: `api_keys` rows with `service='semaphore'` are not deleted (no migration framework — see the Protected Design Decisions in §15) but are orphaned/unread. Manual `DELETE FROM api_keys WHERE service='semaphore'` is optional housekeeping.
 
-**Untouched**: `MANAGER_PHONE` / `IT_ADMIN_PHONE` remain as Notification Recipients contact-record fields (still displayed, editable) but are read by no dispatch path. `config.PROVIDER_TEMPLATES` / `config.DEFAULT_AI_PROVIDERS` (AI provider chain) are unaffected — this round only touches the non-AI notification service list.
+**Untouched**: `MANAGER_PHONE` / `IT_ADMIN_PHONE` remain as Notification Recipients contact-record fields (still displayed, editable) but are read by no dispatch path. *(Superseded 2026-09-15: phone fields and the Notification Recipients card removed; IT Admin Email moved to the Gmail SMTP card.)* `config.PROVIDER_TEMPLATES` / `config.DEFAULT_AI_PROVIDERS` (AI provider chain) are unaffected — this round only touches the non-AI notification service list.
 
 Full implementation contract: `REBUILD_SPEC.md` Part 23–24.
 
