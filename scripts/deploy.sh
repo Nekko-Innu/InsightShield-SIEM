@@ -138,7 +138,14 @@ done
 #     and validation, then process_alert discards it — nothing stored, nothing
 #     paged. The probe used to send a level-12 100001, which stored a HIGH
 #     "brute force" row (and a notification) on every deploy.
+#     install.sh restarts insightshield right before this runs, and systemd calls
+#     it active before gunicorn binds — so wait for /health first (same 10s loop
+#     as healthcheck.sh), or the probe gets connection refused and reports 000.
 if [ -r "$ENV_FILE" ]; then
+  for _ in $(seq 1 20); do
+    curl -fsS http://127.0.0.1:5000/health >/dev/null 2>&1 && break
+    sleep 0.5
+  done
   tok="$(grep -oP '(?<=^WAZUH_WEBHOOK_TOKEN=).*' "$ENV_FILE" 2>/dev/null | tr -d '\r')"
   body="$(curl -sS -m 5 -w '\n%{http_code}' -X POST \
             http://127.0.0.1:5000/wazuh-webhook \
