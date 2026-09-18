@@ -290,6 +290,16 @@ def process_alert(payload: dict) -> int:
 
     attack_type = attack_label(rule_id, payload)
 
+    # Demo filter: drop HIGH/CRITICAL alerts that aren't one of the five demo
+    # attacks before any translate/store/route. Detection (Wazuh/analysisd) is
+    # upstream and unaffected — this only decides what Insight Shield shows.
+    if (config.DEMO_FILTER
+            and severity in config.ACTIONABLE_SEVERITIES
+            and rule_id not in config.DEMO_ATTACK_RULES):
+        logger.info("Demo filter: dropping non-demo alert rule_id=%s severity=%s device=%s",
+                    rule_id, severity, device_name)
+        return -1
+
     logger.info(
         "Processing alert: rule_id=%s severity=%s device=%s",
         rule_id, severity, device_name,

@@ -379,6 +379,26 @@ def ai_enabled_for(severity: str) -> bool:
 # concerns and may diverge.
 ACTIONABLE_SEVERITIES = {"HIGH", "CRITICAL"}
 
+# Demo filter. When DEMO_FILTER=1 in .env, HIGH/CRITICAL alerts whose rule is
+# NOT one of the five capstone-demo attacks are discarded at ingest — never
+# stored, translated, or notified — so the dashboard shows only the demo
+# attacks. Wazuh detection is untouched (this runs in the webhook, downstream
+# of analysisd); lower-severity alerts also pass through unchanged.
+# Toggle with scripts/demo_filter.sh on|off. The demo attacks (see attack_wazuh.sh):
+#   brute force 100001 · ransomware 100044-100047 · LSASS 92900/100099
+#   POS RAM scraping 100010 (same memory-read technique as LSASS, POS process
+#   target — keeps its own "RAM scraping" label) · ARP MitM 100020-100023 ·
+#   SYN flood 100031/100040/100041
+DEMO_FILTER = os.environ.get("DEMO_FILTER", "").lower() in ("1", "true", "yes")
+DEMO_ATTACK_RULES = frozenset({
+    "100001",
+    "100044", "100045", "100046", "100047",
+    "92900", "100099",
+    "100010",
+    "100020", "100021", "100022", "100023",
+    "100031", "100040", "100041",
+})
+
 # Sentinel actor + note for a system auto-close. resolved_by == SYSTEM_ACTOR is
 # what the UI and reports use to tell an automatic closure from a human resolve.
 SYSTEM_ACTOR = "system"
