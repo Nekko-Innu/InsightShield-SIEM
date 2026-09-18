@@ -157,14 +157,31 @@ def translate(
     fallback, so a MEDIUM alert reads exactly as it would if every provider
     were down.
     """
+    prompt = _build_prompt(description)
+    cache_key = "v3:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
     if not use_ai:
+        # A cache read spends no quota, so an alert past AI_REPEAT_CAP still
+        # gets the text an earlier sibling in the burst already paid for,
+        # instead of dropping to static mid-burst.
+        try:
+            cached = cache.get_cached(cache_key)
+        except Exception as e:
+            logger.warning("cache read failed on AI-skipped path: %s", e)
+            cached = None
+        if cached and cached != config.AI_CHAIN_EXHAUSTED:
+            return cached.replace("{device}", device_name), "cache", (
+                "AI skipped (severity gate or AI_REPEAT_CAP). "
+                f"Cache HIT for key={cache_key} (no provider call, no quota spent)."
+            )
         text = _get_static_template(rule_id, device_name)
         return text, "static", (
-            "AI skipped: severity below config.AI_ENABLED_SEVERITIES. "
+            "AI skipped: severity below config.AI_ENABLED_SEVERITIES, or "
+            "AI_REPEAT_CAP reached for this rule+device. "
             "Static template used (no provider call, no quota spent)."
         )
 
-    prompt = _build_prompt(description)
+
     # Round 3: providers come from the DB (ai_providers table) instead of
     # config.DEFAULT_AI_PROVIDERS. The chain runner doesn't change — it
     # still consumes an opaque list[dict] in the canonical shape.
@@ -185,7 +202,7 @@ def translate(
         # — a single crafted ingest could put chosen text on the dashboard, in
         # the Telegram and email bodies and in the CSV export for an hour.
         # it_recommender.py already hashes its full prompt; this matches it.
-        cache_key="v3:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        cache_key=cache_key,
         # This runs inside the /wazuh-webhook POST, and the Wazuh integrator
         # gives up at TIMEOUT_S=10 (wazuh_rules/custom-insightshield.py) — with
         # notification routing still to come in the same request. Persisting the
