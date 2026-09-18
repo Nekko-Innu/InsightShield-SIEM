@@ -687,6 +687,8 @@ def attack_label(rule_id: str, payload: dict) -> str:
     the rule id shown next to it.
     """
     label = payload.get("attack_type") or _infer_attack_type(rule_id)
+    if not config.SHOW_STRIDE and label == ATTACK_LABELS.get(rule_id):
+        label = label.split(" · ")[0]
     if label == "Unknown":
         desc = str(payload.get("description") or "").strip()
         if desc and not desc.startswith(f"Wazuh rule {rule_id}"):
