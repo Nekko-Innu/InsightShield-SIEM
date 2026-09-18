@@ -15,6 +15,7 @@ import db
 import health_score
 from decorators import ROLE_MANAGER, role_required
 from wazuh_api import get_agent_status
+from web.filters import humanize_seconds
 from web.responses import dashboard_for_role
 
 logger = logging.getLogger("insightshield.web.dashboards")
@@ -241,10 +242,12 @@ def dashboard_it():
         agents_color = "var(--status-degraded)"
     else:
         agents_color = "var(--status-offline)"
-    # HIGH/CRITICAL still waiting for an IT ack. This tile used to be 24h MTTA,
-    # which read "—" on any day nobody acked a serious alert and measured the
-    # admin against themselves; db.mtta_seconds still exists for reporting.
-    awaiting_ack = db.count_awaiting_ack()
+    # 24h MTTA. The count-of-awaiting tile that briefly replaced it just
+    # mirrored the Open-alerts backlog, so it's back to the mean time. On a
+    # window where nothing serious was acked yet, show "Awaiting acknowledge"
+    # rather than a bare "—" so a quiet tile reads as pending, not broken.
+    mtta = db.mtta_seconds(24)
+    mtta_display = humanize_seconds(mtta) if mtta is not None else "Awaiting acknowledge"
     # Count BURST_ABSORBER skips in the last 24h for the Groq KPI tile (F9).
     try:
         today = datetime.now(tz=config.PHT).strftime("%Y-%m-%d")
@@ -271,9 +274,7 @@ def dashboard_it():
 
     kpi = {
         "open": open_count,
-        "awaiting_ack": awaiting_ack,
-        # Red while anything is waiting, default ink at zero.
-        "awaiting_ack_color": "var(--status-offline)" if awaiting_ack else None,
+        "mtta": mtta_display,
         "agents": f"{active_agents}/{agents_total}",
         "agents_color": agents_color,
         "groq": groq_kpi,
