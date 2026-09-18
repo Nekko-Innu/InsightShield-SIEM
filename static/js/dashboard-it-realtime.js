@@ -25,6 +25,26 @@
   const perPage = Number(tbody.dataset.perPage) || 0;
   let pendingCount = 0;
 
+  // On a filtered view a new alert isn't inserted — it's only counted behind
+  // the "N new alerts · Reload" chip, so a HIGH/CRITICAL can sit unseen until
+  // the IT admin remembers to click. Auto-reload for HIGH/CRITICAL so an attack
+  // can't hide behind the chip. Gated to:
+  //  - HIGH/CRITICAL only: low-severity noise (or an alert the active filter
+  //    excludes) must not yank the page out from under someone mid-read, and
+  //    this keeps us from re-implementing the server filter (see below).
+  //  - page 1 only: alerts are newest-first, so they only ever land on page 1;
+  //    reloading page 3 wouldn't show the new alert anyway. Later pages keep the
+  //    manual chip.
+  // ponytail: one-shot 3s debounce — a burst coalesces into a single reload.
+  const onFirstPage = (new URLSearchParams(location.search).get("page") || "1") === "1";
+  let reloadTimer = null;
+  function autoReloadFor(severity) {
+    if (!onFirstPage || reloadTimer) return;
+    const sev = (severity || "").toUpperCase();
+    if (sev !== "HIGH" && sev !== "CRITICAL") return;
+    reloadTimer = setTimeout(function () { window.location.reload(); }, 3000);
+  }
+
   function showPendingChip() {
     let chip = document.getElementById("new-alerts-chip");
     if (!chip) {
@@ -56,6 +76,7 @@
         if (filtered) {
           pendingCount += 1;
           showPendingChip();
+          autoReloadFor(data && data.severity);
           return;
         }
         if (data && data.row_html) {

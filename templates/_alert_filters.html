@@ -76,7 +76,11 @@
       Filter
     </button>
     {% if pager.filtered %}
-    <a href="{{ request.path }}"
+    {# applied=1 with no other params is an explicit empty submit: it OVERWRITES
+       the saved session filters. A bare href="{{ request.path }}" only nav'd to
+       the path with no params, which the server reads as "load remembered
+       filters" — so Clear brought the old search/severity right back. #}
+    <a href="{{ request.path }}?applied=1"
        class="px-3 py-2 rounded-md text-sm text-slate-600 hover:text-slate-900 underline">Clear</a>
     {% endif %}
   </div>
