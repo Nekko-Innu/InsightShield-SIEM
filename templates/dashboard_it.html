@@ -24,7 +24,7 @@
 <section class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 flex-shrink-0">
   {% set kpis = [
     ('Open alerts',   kpi.open|default(0),         'slate', None),
-    ('Awaiting acknowledge',  kpi.awaiting_ack|default(0), 'slate', kpi.awaiting_ack_color),
+    ('MTTA (24h)',  kpi.mtta|default('Awaiting acknowledge'), 'slate', None),
     ('Active agents', kpi.agents|default('0/0'),   'green', kpi.agents_color),
     ((primary_provider_label|default('Groq')) ~ ' used', kpi.groq|default('0%'), 'brand', None),
   ] %}

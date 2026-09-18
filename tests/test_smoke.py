@@ -179,7 +179,7 @@ def test_focus_mode_switch_relabels_hide_low(page, live_server):
     """Settings card -> plain-setting route -> dashboard button label."""
     _login(page, live_server, IT_ADMIN)
     page.wait_for_url(re.compile(r"/dashboard/it"))
-    assert "Awaiting acknowledge" in page.content()
+    assert "MTTA (24h)" in page.content()
     page.goto(f"{live_server}/admin/settings?tab=service")
     page.get_by_role("button", name="Off", exact=True).click()
     page.wait_for_url(re.compile(r"tab=service"))
