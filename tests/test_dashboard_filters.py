@@ -53,6 +53,17 @@ def test_unchecked_hide_low_on_submit_clears_it(client):
     assert j["severity"] == "HIGH"
 
 
+def test_clear_link_empties_saved_filters(client):
+    # The Clear link is href="{path}?applied=1" (empty submit). It must WIPE the
+    # saved filters, not just show page 1 — otherwise a following bare nav reloads
+    # the old search/severity and the search bar repopulates (the Clear bug).
+    client.get("/f?applied=1&hide_low=1&severity=HIGH&q=lsass")
+    cleared = client.get("/f?applied=1").get_json()   # what the Clear link hits
+    assert cleared == {"status": "", "severity": "", "q": "", "hide_low": False}
+    # And it stuck: a later bare nav stays empty instead of resurrecting them.
+    assert client.get("/f").get_json()["q"] == ""
+
+
 def test_shared_link_uses_args_without_touching_session(client):
     client.get("/f?applied=1&hide_low=1")            # session: hide_low on
     # A shared/deep link (no `applied` marker) honours its own params...
