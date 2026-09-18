@@ -26,7 +26,7 @@ bp = Blueprint("admin_ops", __name__)
 def admin_backup():
     """
     Round 3: GET deep-link 302s into the Settings Backups tab. POST handlers
-    (run / prune) keep working as before, then redirect to the Settings tab
+    (run / prune / delete_selected) keep working as before, then redirect to the Settings tab
     so the operator stays in the same UI.
     """
     if request.method == "POST":
@@ -63,6 +63,29 @@ def admin_backup():
                 ip=request.remote_addr,
                 details={"removed": removed},
             )
+        elif action == "delete_selected":
+            names = request.form.getlist("names")
+            if not names:
+                flash("No backups selected.", "error")
+            else:
+                try:
+                    deleted, rejected = backup_mod.delete_backups(names)
+                except ValueError as e:
+                    flash(str(e), "error")
+                else:
+                    flash(f"Deleted {len(deleted)} backup(s).", "success")
+                    if rejected:
+                        flash(f"Ignored {len(rejected)} name(s) that are not backups.", "error")
+                    db.log_audit(
+                        action="BACKUP_DELETE",
+                        actor=current_user.username,
+                        actor_role=current_user.role,
+                        target="backups/",
+                        ip=request.remote_addr,
+                        # rejected is free text from the form; cap it so one
+                        # request cannot bloat the audit row.
+                        details={"deleted": deleted, "rejected": rejected[:20]},
+                    )
         return redirect(url_for("admin_settings.admin_settings", tab="backups"))
 
     # GET: deep-link redirect

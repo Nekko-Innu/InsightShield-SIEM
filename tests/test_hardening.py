@@ -823,3 +823,78 @@ def test_plaintext_backup_restore_requires_an_explicit_flag(tmp_path):
     assert backup_mod.restore_db(planted, db_path=target,
                                  allow_plaintext=True) is True
     assert target.read_bytes() != b"original database contents"
+
+
+def test_restore_is_not_undone_by_a_stale_wal(tmp_path, monkeypatch):
+    """A -wal left by a killed process belongs to the old database. restore_db
+    wrote the new main file next to it, SQLite replayed the old frames on the
+    next open, and the restore reported success while every query still
+    returned the pre-restore rows."""
+    import sqlite3
+
+    from cryptography.fernet import Fernet
+
+    import backup as backup_mod
+
+    key = Fernet(Fernet.generate_key())
+    monkeypatch.setattr(backup_mod.crypto_utils, "get_backup_key", lambda: key)
+
+    snap = tmp_path / "snap.db"
+    conn = sqlite3.connect(snap)
+    conn.execute("CREATE TABLE t (v TEXT)")
+    conn.execute("INSERT INTO t VALUES ('from-backup')")
+    conn.commit()
+    conn.close()
+    enc = tmp_path / "insightshield-20260101-000000.db.enc"
+    enc.write_bytes(key.encrypt(snap.read_bytes()))
+
+    live = tmp_path / "live.db"
+    wal = tmp_path / "live.db-wal"
+    conn = sqlite3.connect(live)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA wal_autocheckpoint=0")
+    conn.execute("CREATE TABLE t (v TEXT)")
+    conn.executemany("INSERT INTO t VALUES (?)", [("live-" + "x" * 500,)] * 200)
+    conn.commit()
+    frames = wal.read_bytes()
+    conn.close()           # a clean close checkpoints and deletes the -wal ...
+    wal.write_bytes(frames)  # ... so put it back, as a killed process leaves it
+
+    assert backup_mod.restore_db(enc, db_path=live) is True
+    conn = sqlite3.connect(live)
+    assert conn.execute("SELECT v FROM t").fetchall() == [("from-backup",)]
+    conn.close()
+
+    # The checkpoint ran before the safety copy, so the copy holds the rows
+    # that only existed in the -wal.
+    pre = sqlite3.connect(tmp_path / "live.db.pre-restore.bak")
+    assert pre.execute("SELECT COUNT(*) FROM t").fetchone() == (200,)
+    pre.close()
+
+
+def test_delete_backups_only_touches_offered_names(tmp_path):
+    """The Delete-selected form posts free text. Only names list_backups()
+    offers may reach os.remove, and the last encrypted snapshot stays."""
+    import pytest
+
+    import backup as backup_mod
+
+    enc_a = tmp_path / "insightshield-20260101-000000.db.enc"
+    enc_b = tmp_path / "insightshield-20260102-000000.db.enc"
+    plain = tmp_path / "insightshield-20250101-000000.db"
+    outside = tmp_path.parent / f"{tmp_path.name}-keep.txt"
+    for f in (enc_a, enc_b, plain, outside):
+        f.write_bytes(b"x")
+
+    with pytest.raises(ValueError):
+        backup_mod.delete_backups([enc_a.name, enc_b.name], target_dir=tmp_path)
+    assert enc_a.exists() and enc_b.exists()
+
+    deleted, rejected = backup_mod.delete_backups(
+        [enc_a.name, plain.name, f"../{outside.name}", "C:.env"],
+        target_dir=tmp_path,
+    )
+    assert deleted == sorted([enc_a.name, plain.name])
+    assert rejected == sorted([f"../{outside.name}", "C:.env"])
+    assert not enc_a.exists() and not plain.exists()
+    assert enc_b.exists() and outside.exists()

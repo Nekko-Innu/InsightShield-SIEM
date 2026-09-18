@@ -283,6 +283,37 @@ def test_backup_run_round_trip(page, live_server):
     assert page.locator("table tbody tr").count() == before + 1
 
 
+def test_backup_delete_selected_and_restore_command(page, live_server):
+    _login(page, live_server, IT_ADMIN)
+    page.goto(f"{live_server}/admin/settings?tab=backups")
+    # Two fresh snapshots, so deleting one never trips the keep-one guard.
+    # The names carry seconds, so the second click has to land in a new one.
+    page.get_by_role("button", name="Run backup now").click()
+    page.wait_for_url("**/admin/settings?tab=backups")
+    page.wait_for_timeout(1100)
+    page.get_by_role("button", name="Run backup now").click()
+    page.wait_for_url("**/admin/settings?tab=backups")
+
+    rows = page.locator("table tbody tr")
+    before = rows.count()
+    newest = rows.first.locator("td.font-mono").text_content()
+
+    page.get_by_role("button", name="Restore").first.click()
+    cmd = page.locator("#restore-cmd")
+    assert cmd.is_visible()
+    assert f"backup restore backups/{newest}\n" in cmd.text_content()
+    page.locator("#restore-modal").get_by_role("button", name="Close").click()
+
+    # Playwright dismisses confirm() by default, which would cancel the submit.
+    page.once("dialog", lambda d: d.accept())
+    rows.first.locator('input[name="names"]').check()
+    page.get_by_role("button", name="Delete selected").click()
+    page.wait_for_url("**/admin/settings?tab=backups")
+    assert "Deleted 1 backup(s)" in page.locator("#flash-seed").text_content()
+    assert rows.count() == before - 1
+    assert newest not in page.locator("table tbody").text_content()
+
+
 # ── Security regressions ─────────────────────────────────────────────────────
 
 def test_alert_detail_hides_it_only_sections_from_manager(page, live_server):
