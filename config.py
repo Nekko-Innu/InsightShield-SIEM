@@ -390,6 +390,11 @@ ACTIONABLE_SEVERITIES = {"HIGH", "CRITICAL"}
 #   target — keeps its own "RAM scraping" label) · ARP MitM 100020-100023 ·
 #   SYN flood 100031/100040/100041
 DEMO_FILTER = os.environ.get("DEMO_FILTER", "").lower() in ("1", "true", "yes")
+# STRIDE suffix on attack labels ("Port scan · Information disclosure"). 0 drops
+# it from new alerts and — via scripts/relabel_alerts.py, which every deploy
+# runs — from stored ones. Toggle with scripts/stride.sh on|off.
+SHOW_STRIDE = os.environ.get("SHOW_STRIDE", "1").lower() in ("1", "true", "yes")
+
 DEMO_ATTACK_RULES = frozenset({
     "100001",
     "100044", "100045", "100046", "100047",

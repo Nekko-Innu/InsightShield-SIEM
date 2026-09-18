@@ -360,6 +360,18 @@ def test_unmapped_rule_keeps_full_wazuh_description():
     assert wazuh_receiver.attack_label("100001", {"description": desc}).startswith("Brute-force")
 
 
+def test_show_stride_off_drops_only_the_category_suffix(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "SHOW_STRIDE", False)
+    assert wazuh_receiver.attack_label("100001", {}) == "Brute-force login attempt"
+    assert wazuh_receiver.attack_label("100046", {}) == "Ransomware: mass file changes"
+    # Unmapped rules show Wazuh's own description — never ours to trim.
+    desc = "Some stock rule · with a dot"
+    assert wazuh_receiver.attack_label("61603", {"description": desc}) == desc
+    monkeypatch.setattr(config, "SHOW_STRIDE", True)
+    assert wazuh_receiver.attack_label("100001", {}).endswith("· Spoofing")
+
+
 def test_long_description_is_cut_not_rejected():
     payload = {"rule_id": "100010", "device_name": "POSsys1", "rule_level": 15,
                "description": "D" * 1000}
