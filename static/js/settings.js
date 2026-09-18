@@ -356,4 +356,18 @@
     const message = form.dataset.confirm;
     if (message && !window.confirm(message)) e.preventDefault();
   });
+
+  // ── Backups tab: select-all box and the Restore command modal ──
+  document.addEventListener("change", (e) => {
+    if (e.target.id !== "backup-select-all") return;
+    document.querySelectorAll('input[name="names"][form="delete-selected"]')
+      .forEach((box) => { box.checked = e.target.checked; });
+  });
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-restore-name]");
+    if (!btn) return;
+    // textContent, never innerHTML: the name ends up in a root shell.
+    document.getElementById("restore-name").textContent = btn.dataset.restoreName;
+    window.wpOpenModal("restore-modal");
+  });
 })();

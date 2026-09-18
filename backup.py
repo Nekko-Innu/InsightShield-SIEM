@@ -8,6 +8,7 @@
 
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -23,6 +24,12 @@ logger = logging.getLogger("insightshield.backup")
 
 DEFAULT_BACKUP_DIR = Path("backups")
 DEFAULT_KEEP = 14  # two weeks of daily snapshots
+
+# The exact name backup_db() writes. The Settings tab hands out a restore
+# command to paste into a root shell, so it is offered only for names that
+# cannot carry shell syntax — a planted "insightshield-$(...).db.enc" still
+# matches the list glob and still shows in the table, but gets no command.
+_SNAPSHOT_NAME = re.compile(r"insightshield-\d{8}-\d{6}\.db(\.enc)?")
 
 
 def _ensure_dir(path: Path) -> None:
@@ -109,6 +116,7 @@ def list_backups(target_dir: Path | str = DEFAULT_BACKUP_DIR) -> list[dict]:
             "size_bytes": stat.st_size,
             "mtime": datetime.fromtimestamp(stat.st_mtime, tz=config.PHT).isoformat(),
             "encrypted": p.suffix == ".enc",
+            "standard_name": bool(_SNAPSHOT_NAME.fullmatch(p.name)),
         })
     return rows
 
@@ -132,6 +140,16 @@ def restore_db(backup_path: Path | str, db_path: Path | str = dbmod.DB_PATH,
         logger.error("Restore failed: %s does not exist", backup_path)
         return False
 
+    # Fold any WAL left by an unclean stop into the main file, so the safety
+    # copy below holds the committed data rather than a stale main file.
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.close()
+        except sqlite3.Error as e:
+            logger.warning("Pre-restore checkpoint of %s failed (%s)", db_path, e)
+
     # Paranoia copy of the current DB in case this restore is wrong.
     if db_path.exists():
         pre = db_path.with_suffix(db_path.suffix + ".pre-restore.bak")
@@ -148,6 +166,7 @@ def restore_db(backup_path: Path | str, db_path: Path | str = dbmod.DB_PATH,
             logger.error("Restore failed: decryption error on %s (%s)",
                          backup_path, e)
             return False
+        _drop_wal_sidecars(db_path)
         db_path.write_bytes(plaintext)
         logger.warning(
             "Database restored from encrypted %s -> %s (%d bytes plaintext)",
@@ -178,10 +197,54 @@ def restore_db(backup_path: Path | str, db_path: Path | str = dbmod.DB_PATH,
                 "backup.", backup_path,
             )
             return False
+        _drop_wal_sidecars(db_path)
         shutil.copy2(backup_path, db_path)
         logger.warning("Database restored from UNVERIFIED plaintext %s -> %s",
                        backup_path, db_path)
     return True
+
+
+def _drop_wal_sidecars(db_path: Path) -> None:
+    """Remove <db>-wal and <db>-shm before the new file goes in.
+
+    A -wal left behind by a killed process belongs to the OLD database, and
+    SQLite replays it onto whatever main file it finds next to it: the restore
+    reported success while every query still returned the pre-restore data.
+    """
+    for suffix in ("-wal", "-shm"):
+        Path(str(db_path) + suffix).unlink(missing_ok=True)
+
+
+def delete_backups(names: list[str],
+                   target_dir: Path | str = DEFAULT_BACKUP_DIR,
+                   ) -> tuple[list[str], list[str]]:
+    """
+    Delete the named backup files. Returns (deleted, rejected).
+
+    Names come from a form, so only ones list_backups() offers are touched —
+    "../insightshield.db" or "C:.env" never reach os.remove. Raises ValueError
+    if the request would leave no encrypted snapshot: those are the only ones
+    that restore with an integrity check.
+    """
+    rows = {r["name"]: r for r in list_backups(target_dir)}
+    wanted = set(names)
+    rejected = sorted(wanted - rows.keys())
+    chosen = sorted(wanted & rows.keys())
+
+    encrypted = {n for n, r in rows.items() if r["encrypted"]}
+    if encrypted and encrypted <= wanted:
+        raise ValueError("Keep at least one encrypted backup — "
+                         "untick one before deleting.")
+
+    deleted = []
+    for name in chosen:
+        try:
+            os.remove(rows[name]["path"])
+            deleted.append(name)
+            logger.info("Deleted backup: %s", name)
+        except OSError as e:
+            logger.warning("Failed to delete %s: %s", name, e)
+    return deleted, rejected
 
 
 def prune_old_backups(keep: int = DEFAULT_KEEP,
@@ -229,6 +292,8 @@ def _cli_main(argv: list[str]) -> int:
         allow_plaintext = "--allow-plaintext" in argv[2:]
         target = argv[1]
         ok = restore_db(target, allow_plaintext=allow_plaintext)
+        print(f"Restored from {target}. Start the services again." if ok
+              else "Restore FAILED — the database was not changed. See the log above.")
         return 0 if ok else 1
     if argv[0] == "prune":
         keep = int(argv[1]) if len(argv) >= 2 else DEFAULT_KEEP
