@@ -465,12 +465,25 @@ def _kick_it_recommendation(
     # many concurrent provider requests at once (see _ITREC_SEMAPHORE). Bounded
     # wait: if the slot doesn't free within the window, skip rather than pile up
     # threads — scheduler._it_rec_backfill picks up whatever was skipped.
+    #
+    # The whole burst reaches the reuse check above within seconds, before any
+    # sibling has finished, so it misses. By the time this thread gets the slot,
+    # gives up waiting for it, or its own chain fails, a sibling usually HAS
+    # finished — check again at each of those points before spending a call or
+    # leaving the card blank.
     acquired = _ITREC_SEMAPHORE.acquire(timeout=config.AI_CHAIN_BUDGET_S + 5.0)
     if not acquired:
-        logger.warning("IT recommendation skipped (alert_id=%s): recommender busy", alert_id)
+        if not _reuse_sibling_recommendation(alert_id, rule_id, device_name):
+            logger.warning("IT recommendation skipped (alert_id=%s): recommender busy",
+                           alert_id)
         return
     try:
+        if _reuse_sibling_recommendation(alert_id, rule_id, device_name):
+            return
         text, provider = it_recommender.recommend(rule_id, raw_alert_json, device_name)
+        if (provider == config.AI_CHAIN_EXHAUSTED
+                and _reuse_sibling_recommendation(alert_id, rule_id, device_name)):
+            return
         db.update_it_recommendation(alert_id, text, provider_used=provider)
         logger.info("IT recommendation complete (alert_id=%s provider=%s)",
                     alert_id, provider)

@@ -200,6 +200,45 @@ def test_ignore_negative_cache_walks_past_the_poison():
     assert "No active providers" in reasoning
 
 
+def test_failed_chain_copies_a_sibling_that_finished_meanwhile(monkeypatch):
+    """Live 2026-09-18: six alerts in 8s all missed reuse at the start; one
+    chain then failed (Groq 429 + Gemini 503) and stored AI_CHAIN_EXHAUSTED
+    while three siblings already had steps. Reuse must be tried again."""
+    import it_recommender
+
+    target = _alert()
+    source = _alert(minutes_ago=1)
+
+    def _recommend(*a, **kw):
+        db.update_it_recommendation(source, STEPS)   # sibling finishes mid-chain
+        return config.AI_CHAIN_EXHAUSTED, config.AI_CHAIN_EXHAUSTED
+
+    monkeypatch.setattr(it_recommender, "recommend", _recommend)
+    wazuh_receiver._kick_it_recommendation(target, "{}", "wazuh-system", "100020")
+
+    stored = db.get_alert(target)["it_recommendation"]
+    assert STEPS in stored and f"#{source}" in stored
+
+
+def test_capped_translation_reads_the_cache_instead_of_static():
+    """Live 2026-09-18: alerts 2-5 were cache HITs, the 6th hit AI_REPEAT_CAP
+    and went static although the identical cached text was right there."""
+    import cache
+    import groq_translator
+
+    desc = "Multiple failed logins"
+    key = "v3:" + __import__("hashlib").sha256(
+        groq_translator._build_prompt(desc).encode("utf-8")).hexdigest()
+    cache.set_cached(key, "WHAT HAPPENED: brute force on {device}.")
+    try:
+        text, provider, _ = groq_translator.translate(
+            "100001", desc, "POSsys1", use_ai=False)
+        assert provider == "cache"
+        assert text == "WHAT HAPPENED: brute force on POSsys1."
+    finally:
+        cache.clear_all()
+
+
 def test_manager_word_cap_is_untouched_by_the_it_rec_bump():
     """The IT cap moved to 120; the manager translation stays at 100."""
     import validator
