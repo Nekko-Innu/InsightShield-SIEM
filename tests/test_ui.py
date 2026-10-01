@@ -15,6 +15,8 @@ import urllib.request
 
 import pytest
 
+import sqlite3
+
 from conftest import SEED_ALERTS, WEBHOOK_TOKEN, insert_alert
 from test_smoke import IT_ADMIN, MANAGER, _csrf_token, _login
 
@@ -71,6 +73,7 @@ IT_PAGES = [
     "/alert/1",
     "/report",
     "/report?generated=1",
+    "/report?generated=1&form=management",
     "/admin/settings?tab=service",
     "/admin/settings?tab=audit",
     "/admin/settings?tab=backups",
@@ -84,7 +87,8 @@ def test_it_admin_pages_load_clean(page, live_server, path):
     _visit(page, live_server, path)
 
 
-@pytest.mark.parametrize("path", ["/dashboard/manager", "/alert/1", "/report"])
+@pytest.mark.parametrize("path", ["/dashboard/manager", "/alert/1", "/report",
+                                  "/report?generated=1"])
 def test_manager_pages_load_clean(page, live_server, path):
     _login(page, live_server, MANAGER)
     _visit(page, live_server, path)
@@ -124,6 +128,41 @@ def test_manager_feed_lists_seeded_alerts(page, live_server):
     _login(page, live_server, MANAGER)
     page.goto(f"{live_server}/dashboard/manager")
     assert page.locator("#alerts-feed li").count() >= len(SEED_ALERTS)
+
+
+def test_manager_filtered_feed_reloads_for_a_serious_alert(page, live_server, live_server_db):
+    """A HIGH/CRITICAL arrival reloads the feed with no click, filter or not.
+    Routine arrivals raise no notice at all — they come every minute."""
+    _login(page, live_server, MANAGER)
+    page.goto(f"{live_server}/dashboard/manager?severity=HIGH")
+    page.wait_for_selector("#alerts-feed")
+    insert_alert(live_server_db, "MGR-LIVE-LOW", "LOW")
+
+    # One 15s poll tick, plus slack.
+    with page.expect_event("load", timeout=25_000):
+        insert_alert(live_server_db, "MGR-LIVE-HIGH", "HIGH")
+    assert page.locator("#alerts-feed li", has_text="MGR-LIVE-HIGH").count() == 1
+    assert page.locator("#new-alerts-chip").count() == 0
+
+
+def test_manager_view_follows_a_status_change_by_it(page, live_server, live_server_db):
+    """An acknowledgment does not move MAX(id); the status watermark does."""
+    alert_id = insert_alert(live_server_db, "MGR-STATUS-DEVICE", "HIGH")
+    _login(page, live_server, MANAGER)
+    page.goto(f"{live_server}/dashboard/manager")
+    row = page.locator("#alerts-feed li", has_text="MGR-STATUS-DEVICE")
+    assert "IT acknowledged" not in row.inner_text()
+
+    with page.expect_event("load", timeout=25_000):
+        # What db.acknowledge_alert writes, from a second process.
+        conn = sqlite3.connect(live_server_db, timeout=10)
+        conn.execute(
+            "UPDATE alerts SET acknowledged = 1, acknowledged_by = 'admin', "
+            "acknowledged_at = '2099-01-01T00:00:00+08:00' WHERE id = ?", (alert_id,))
+        conn.commit()
+        conn.close()
+    assert "IT acknowledged" in page.locator(
+        "#alerts-feed li", has_text="MGR-STATUS-DEVICE").inner_text()
 
 
 def test_alert_filters_narrow_the_table(page, live_server):

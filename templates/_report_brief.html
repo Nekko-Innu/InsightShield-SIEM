@@ -1,0 +1,179 @@
+{# templates/_report_brief.html
+   The management form of the Security Audit Report. Included by report.html
+   when report_form == 'management'; reads the one `brief` dict built by
+   reports._brief_context from the same stored records as the technical form.
+
+   Written for a reader who does not log in to the dashboard: status first,
+   then scope, then what happened, what needs attention, how fast it was
+   handled, what was done, and what is being asked of management.
+
+   Nothing on this page may carry a detection identifier, a technique
+   reference, a network address, process information, a severity value or raw
+   event data — tests/test_report_brief.py renders it and asserts that. Every
+   stored string arrives already checked by reports._brief_safe.
+
+   Same cover page, table of contents and section headers as the technical
+   form (_report_print.html). Section ids match that partial's list. #}
+{% macro head(n, title) %}
+  <header class="rb-h2">
+    <span class="rb-h2__marker">&sect; 0{{ n }}</span>
+    <h2 class="rb-h2__title">{{ title }}</h2>
+    <span class="rb-h2__rule"></span>
+  </header>
+{% endmacro %}
+{% set period = "1 day" if brief.days == 1 else brief.days ~ " days" %}
+{% set status_color =
+  'var(--status-online)'   if brief.status == 'Good'
+  else 'var(--status-degraded)' if brief.status == 'Needs attention'
+  else 'var(--status-offline)' %}
+
+<div class="report-body" id="report-brief">
+
+{% include "_report_print.html" %}
+
+{# ── 1. Status — the answer, before anything else ─────────────────────── #}
+<section id="brief-status" class="rb-panel mb-6">
+  {{ head("1", "Security status for the period") }}
+  {# The word carries the status; the colour only repeats it, so the line
+     still reads in a black-and-white printout. #}
+  <p class="text-2xl font-bold" style="color: {{ status_color }};">Security status: {{ brief.status }}</p>
+  <p class="rb-body" style="margin-top:8px;">
+    Score for this period: <strong>{{ brief.score }} out of 100</strong>.
+    {% if brief.prior_total %}
+      The {{ period }} before scored {{ brief.prior_score }} out of 100, so the branch's position
+      {% if brief.score - brief.prior_score >= 5 %}improved.
+      {% elif brief.prior_score - brief.score >= 5 %}got worse.
+      {% else %}stayed about the same.{% endif %}
+    {% else %}
+      No security events were recorded in the {{ period }} before, so there is nothing to compare this score with.
+    {% endif %}
+  </p>
+  <p class="rb-body" style="margin-top:8px;">
+    {% if brief.attention_total > 3 %}
+      {{ brief.attention_total }} serious events are still open. That is more than this report lists in full. The three most serious are in section 4.
+    {% elif brief.attention_total %}
+      {{ brief.attention_total }} serious event{{ 's are' if brief.attention_total != 1 else ' is' }} still open. See section 4.
+    {% else %}
+      Nothing serious is waiting to be dealt with.
+    {% endif %}
+  </p>
+</section>
+
+{# ── 2. Scope — so that silence is not read as safety ─────────────────── #}
+<section id="brief-watched" class="rb-panel mb-6">
+  {{ head("2", "What was being watched") }}
+  <p class="rb-body">
+    {% if brief.agents_total %}
+      {{ brief.agents_total }} till{{ 's' if brief.agents_total != 1 }} and computer{{ 's' if brief.agents_total != 1 }}
+      {{ 'are' if brief.agents_total != 1 else 'is' }} set up to be watched.
+      {{ brief.agents_online }} {{ 'were' if brief.agents_online != 1 else 'was' }} reporting when this report was made.
+      {% if brief.agents_offline %}
+        Not reporting: {{ brief.agents_offline | join(', ') }}. Nothing that happens on a machine can be seen while it is not reporting.
+      {% endif %}
+    {% else %}
+      The list of watched tills and computers could not be read when this report was made.
+    {% endif %}
+  </p>
+  <p class="rb-body" style="margin-top:8px;">
+    Attacks that work by interfering with the branch network itself, rather than with one
+    computer, are not covered by the current setup. Adding that cover is listed in section 7.
+  </p>
+</section>
+
+{# ── 3. What happened — volume in words, not a severity table ─────────── #}
+<section id="brief-happened" class="rb-panel mb-6">
+  {{ head("3", "What happened") }}
+  <p class="rb-body">
+    {% if brief.total %}
+      <strong data-brief-total>{{ brief.total }}</strong> security event{{ 's were' if brief.total != 1 else ' was' }} recorded this period.
+      Of these, <strong data-brief-action>{{ brief.needed_action }}</strong> {{ 'were' if brief.needed_action != 1 else 'was' }} serious enough to need someone to act,
+      and <strong>{{ brief.routine }}</strong> {{ 'were' if brief.routine != 1 else 'was' }} routine and kept for the record.
+    {% else %}
+      No security events were recorded this period.
+    {% endif %}
+  </p>
+  {% if brief.most_common %}
+  <p class="rb-body" style="margin-top:8px;">The most common kind of event: {{ brief.most_common }}</p>
+  {% endif %}
+</section>
+
+{# ── 4. Needs attention — at most three, most serious first ───────────── #}
+<section id="brief-attention" class="rb-panel mb-6">
+  {{ head("4", "The things that need attention") }}
+  {% for it in brief.attention %}
+  <div style="margin-top:{{ '0' if loop.first else '16px' }};">
+    <p class="rb-body"><strong>{{ loop.index }}. {{ it.device }}, {{ it.date }}</strong></p>
+    <p class="rb-body"><strong>What happened:</strong>
+      {{ it.what or 'A serious security event was recorded on this machine. Ask IT for the details.' }}</p>
+    {% if it.affect %}<p class="rb-body"><strong>What it could affect:</strong> {{ it.affect }}</p>{% endif %}
+    {% if it.todo %}<p class="rb-body"><strong>What to do:</strong> {{ it.todo }}</p>{% endif %}
+    <p class="rb-body"><strong>Status:</strong> {{ it.state }}.</p>
+  </div>
+  {% else %}
+  <p class="rb-body">Nothing needs attention. Every serious event in this period has been closed.</p>
+  {% endfor %}
+</section>
+
+{# ── 5. Speed of handling. No detection-time figure: the system knows when
+       an event reached it, not when the attack began. ──────────────────── #}
+<section id="brief-speed" class="rb-panel mb-6">
+  {{ head("5", "How quickly alerts were handled") }}
+  <p class="rb-body">
+    {% if brief.mean_ack %}
+      Serious alerts were picked up by IT in an average of <strong>{{ brief.mean_ack }}</strong> after they appeared{% if brief.prior_mean_ack %},
+      compared with {{ brief.prior_mean_ack }} in the {{ period }} before{% endif %}.
+    {% else %}
+      No alert was picked up by IT in this period, so there is no handling time to report.
+    {% endif %}
+    <strong>{{ brief.closed }}</strong> of {{ brief.total }} event{{ 's have' if brief.total != 1 else ' has' }} been closed;
+    <strong>{{ brief.open }}</strong> remain{{ 's' if brief.open == 1 }} open.
+  </p>
+</section>
+
+{# ── 6. Already done — so the brief is not only a list of problems ────── #}
+<section id="brief-done" class="rb-panel mb-6">
+  {{ head("6", "What was already done") }}
+  {% for it in brief.done %}
+  <p class="rb-body" style="margin-top:{{ '0' if loop.first else '8px' }};">
+    <strong>{{ it.device }}, {{ it.date }}.</strong>
+    {{ it.what or 'A serious security event was recorded on this machine.' }}
+    {{ ('IT closed it and noted: ' ~ it.note) if it.note else 'IT dealt with it and closed it.' }}
+  </p>
+  {% else %}
+  <p class="rb-body">No serious event was closed by IT in this period.</p>
+  {% endfor %}
+  {% if brief.done_total > brief.done | length %}
+  <p class="rb-meta" style="margin-top:8px;">Showing the {{ brief.done | length }} most recent of {{ brief.done_total }}.</p>
+  {% endif %}
+</section>
+
+{# ── 7. Decisions — asked for outright, never left to be inferred. The four
+       items are the study's standing recommendations; a cost that is not
+       known is stated as not known rather than estimated. ──────────────── #}
+<section id="brief-decisions" class="rb-panel mb-6">
+  {{ head("7", "Decisions needed from management") }}
+  <p class="rb-body">Each item below is a request for a decision. Everything above this section is for your information only.</p>
+  {% for d in [
+    ("Equipment to watch the branch network",
+     "Attacks on the network itself can be seen, not only attacks on one computer.",
+     "This kind of attack stays out of sight."),
+    ("A paid plan for the service that writes the plain explanations",
+     "Every alert gets its own explanation, even when many arrive at once.",
+     "During a rush of alerts, some are shown with a standard message."),
+    ("A second sign-in step for the IT administrator account",
+     "A stolen password alone is not enough to get into the security system.",
+     "Anyone who learns that one password can open the system and its saved keys."),
+    ("A short security briefing for branch staff",
+     "Staff know what an alert means and who to tell.",
+     "A warning can be seen and not acted on."),
+  ] %}
+  <div style="margin-top:16px;">
+    <p class="rb-body"><strong>Decision {{ loop.index }}. {{ d[0] }}</strong></p>
+    <p class="rb-body"><strong>What it costs:</strong> a quote is needed.</p>
+    <p class="rb-body"><strong>What it buys:</strong> {{ d[1] }}</p>
+    <p class="rb-body"><strong>If put off:</strong> {{ d[2] }}</p>
+  </div>
+  {% endfor %}
+</section>
+
+</div>{# /#report-brief #}

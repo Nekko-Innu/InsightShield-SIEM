@@ -24,8 +24,10 @@ bp = Blueprint("api", __name__)
 @bp.route("/api/alerts/latest")
 @login_required
 def alerts_latest():
-    """Latest-alert-id probe for manager dashboard polling (ui.js 15s tick)."""
-    return jsonify({"latest_id": db.get_latest_alert_id() or 0})
+    """Alert watermark probe for manager dashboard polling (ui.js 15s tick).
+
+    latest_id is also read by the IT dashboard's SSE fallback."""
+    return jsonify(db.get_alert_watermark())
 
 @bp.route("/health")
 def health():

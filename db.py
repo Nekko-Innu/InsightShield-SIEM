@@ -396,6 +396,38 @@ def get_latest_alert_id() -> int | None:
     return row[0] if row and row[0] is not None else None
 
 
+def get_alert_watermark() -> dict:
+    """What /api/alerts/latest hands the Manager dashboard's 15s poll.
+
+    `latest_id` alone could not see a status change: an acknowledgment or a
+    resolution does not move MAX(id), so IT's work only reached the Manager's
+    open view on the next manual reload. `status_ts` is the newest human status
+    change. System auto-closes are left out on purpose — every sub-HIGH alert
+    is auto-closed at ingest, so counting them would move this on each arrival
+    and turn low-severity noise into a status change.
+
+    `latest_actionable_id` lets the client tell a HIGH/CRITICAL arrival from
+    the rest without re-implementing the server's filter.
+    """
+    sevs = sorted(config.ACTIONABLE_SEVERITIES)
+    conn = _get_conn()
+    # ponytail: full scan per poll, fine at this table size. Add an index on
+    # resolved_at/acknowledged_at if the alerts table reaches the millions.
+    row = conn.execute(
+        "SELECT MAX(id), "
+        "       MAX(CASE WHEN resolved_by = ? THEN NULL "
+        "                ELSE COALESCE(resolved_at, acknowledged_at) END), "
+        f"      MAX(CASE WHEN severity IN ({','.join('?' * len(sevs))}) THEN id END) "
+        "FROM alerts",
+        (config.SYSTEM_ACTOR, *sevs),
+    ).fetchone()
+    return {
+        "latest_id": row[0] or 0,
+        "status_ts": row[1] or "",
+        "latest_actionable_id": row[2] or 0,
+    }
+
+
 def get_alert(alert_id: int) -> dict | None:
     """
     Fetch a single alert by ID for the detail view.

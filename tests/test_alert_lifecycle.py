@@ -96,6 +96,30 @@ def test_focus_mode_widens_hide_low_to_medium():
         db.set_setting("alert_focus_mode", "0")
 
 
+def test_status_watermark_moves_on_human_status_change_only():
+    # What the Manager dashboard polls. An ack or a resolve must move
+    # status_ts without moving latest_id; a system auto-close must not move it,
+    # or every low-severity arrival would read as a status change.
+    high = _store("HIGH")
+    before = db.get_alert_watermark()
+    assert before["latest_id"] == before["latest_actionable_id"] == high
+
+    db.acknowledge_alert(high, "admin")
+    acked = db.get_alert_watermark()
+    assert acked["latest_id"] == before["latest_id"]
+    assert acked["status_ts"] > before["status_ts"]
+
+    db.resolve_alert(high, "admin", "handled")
+    resolved = db.get_alert_watermark()
+    assert resolved["status_ts"] > acked["status_ts"]
+
+    med = _store("MEDIUM"); db.auto_close_alert(med)
+    after = db.get_alert_watermark()
+    assert after["latest_id"] == med
+    assert after["latest_actionable_id"] == high
+    assert after["status_ts"] == resolved["status_ts"]
+
+
 def test_report_summary_splits_auto_from_human():
     # Fresh range check: human-resolve a HIGH, auto-close a MEDIUM, same day.
     med = _store("MEDIUM"); db.auto_close_alert(med)

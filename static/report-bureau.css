@@ -862,6 +862,13 @@
   .report-body section[id] {
     page-break-before: always;
   }
+  /* The management form's seven sections are a paragraph or two each; a
+     page apiece would print mostly blank paper. They flow, and only avoid
+     being split across a page boundary. */
+  #report-brief section[id] {
+    page-break-before: auto;
+    page-break-inside: avoid;
+  }
   .report-toc {
     padding: 0;
     border: 0;
