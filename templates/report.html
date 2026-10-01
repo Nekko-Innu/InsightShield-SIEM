@@ -68,6 +68,16 @@
          the AI chain + DB queries on this flag — direct URL visits
          without it land on the empty-state CTA below, so the AI
          provider chain doesn't burn on every page load. #}
+      {# The two forms of the report, built from the same period and the
+         same stored records. Each role lands on the one written for it. #}
+      <div>
+        <label for="report-form" class="block text-xs font-medium text-slate-600 mb-1">Report form</label>
+        <select id="report-form" name="form"
+                class="rounded-md border border-surface-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none">
+          <option value="management" {% if report_form == 'management' %}selected{% endif %}>Management form</option>
+          <option value="technical" {% if report_form == 'technical' %}selected{% endif %}>Technical form</option>
+        </select>
+      </div>
       <input type="hidden" name="generated" value="1">
       <button type="submit"
               class="px-4 py-2 text-sm rounded-md bg-brand-500 text-white hover:bg-brand-600">Generate</button>
@@ -82,7 +92,7 @@
          dict-spread invocation since url_for() can't accept it
          as a direct kwarg. #}
       {% if generated %}
-      <a href="{{ url_for('reports.report_pdf', **{'from': date_from, 'to': date_to, 'generated': '1'}) }}"
+      <a href="{{ url_for('reports.report_pdf', **{'from': date_from, 'to': date_to, 'generated': '1', 'form': report_form}) }}"
          download
          class="px-4 py-2 text-sm rounded-md bg-brand-500 text-white hover:bg-brand-600 inline-flex items-center gap-1.5"
          title="Download this report as a PDF (cover · TOC · sections · appendix)">
@@ -112,6 +122,8 @@
     isn&rsquo;t spent on bookmark hits.
   </p>
 </section>
+{% elif report_form == 'management' %}
+{% include "_report_brief.html" %}
 {% else %}
 
 <div class="report-body">
@@ -166,7 +178,7 @@
      agent-coverage figure directly from the `agents` context list. #}
   <p class="rb-body" style="margin-top:10px;">
     <strong>Highlights.</strong>
-    {{ agents | selectattr('status', 'equalto', 'active') | list | length }} of {{ agents | length }} monitored endpoints reported continuously through the period.
+    {{ agents_online }} of {{ agents | length }} monitored endpoints reported continuously through the period.
   </p>
 </section>
 
@@ -185,12 +197,12 @@
 
   <p class="rb-body">
     <strong>Audit Objectives.</strong>
-    This report evaluates detection coverage and operational follow-through of the Insight Shield SIEM during the reporting period {{ date_from }} &rarr; {{ date_to }}. It covers every alert Wazuh forwarded over the integration webhook &mdash; both the 31 custom detection rules deployed in <span class="rb-meta">custom_retail_rules.xml</span> and any stock Wazuh rule that fired at level 2 or above.
+    This report evaluates detection coverage and operational follow-through of the Insight Shield SIEM during the reporting period {{ date_from }} &rarr; {{ date_to }}. It covers every alert Wazuh forwarded over the integration webhook &mdash; both the custom detection rules deployed in <span class="rb-meta">custom_retail_rules.xml</span> and any stock Wazuh rule that fired at level 2 or above.
   </p>
 
   <p class="rb-body" style="margin-top:14px;">
     <strong>Scope.</strong>
-    {{ agents | selectattr('status', 'equalto', 'active') | list | length }} of {{ agents | length }} monitored endpoints were active during the reporting window; remaining endpoints were offline for planned maintenance or were not yet deployed. Alerts were ingested exclusively through the loopback-restricted webhook at <span class="rb-meta">/wazuh-webhook</span>.
+    {{ agents_online }} of {{ agents | length }} monitored endpoints were active during the reporting window; remaining endpoints were offline for planned maintenance or were not yet deployed. Alerts were ingested exclusively through the loopback-restricted webhook at <span class="rb-meta">/wazuh-webhook</span>.
   </p>
 
   <p class="rb-body" style="margin-top:14px;">
@@ -336,7 +348,7 @@
   {# Agent sensor coverage — Bureau panel. Coverage here means
      literal sensor coverage: dead agents create blind spots in
      Detect, so they belong under this CSF function. #}
-  {% set _online = agents | selectattr('status', 'equalto', 'active') | list | length %}
+  {% set _online = agents_online %}
   {% set _total = agents | length %}
   <section class="rb-panel">
     <div class="rb-panel__head">Agent sensor coverage</div>

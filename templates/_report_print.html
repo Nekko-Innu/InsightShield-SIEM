@@ -25,6 +25,20 @@
   {"id": "alert-details",     "label": "Alert Details"},
   {"id": "appendix-raw",      "label": "Appendix A — Raw Wazuh JSON"}
 ] %}
+{# The management form shares this cover and TOC; only the section list and
+   the cover's wording differ. Its ids live in templates/_report_brief.html. #}
+{% set is_brief = report_form == 'management' %}
+{% if is_brief %}
+{% set sections = [
+  {"id": "brief-status",    "label": "Security Status for the Period"},
+  {"id": "brief-watched",   "label": "What Was Being Watched"},
+  {"id": "brief-happened",  "label": "What Happened"},
+  {"id": "brief-attention", "label": "The Things That Need Attention"},
+  {"id": "brief-speed",     "label": "How Quickly Alerts Were Handled"},
+  {"id": "brief-done",      "label": "What Was Already Done"},
+  {"id": "brief-decisions", "label": "Decisions Needed From Management"}
+] %}
+{% endif %}
 
 {# ── Cover page (Marker treatment) ───────────────────────────────────
    Round G follow-up. Replaces the earlier modest hero card with the
@@ -48,7 +62,7 @@
 
     <div class="rb-cover__eyebrow">
       <span class="marker">REPORT · 01</span>
-      <span>Security · Detection · Audit</span>
+      <span>{{ 'Security · Management · Summary' if is_brief else 'Security · Detection · Audit' }}</span>
     </div>
 
     <h1 class="rb-cover__title">
@@ -56,6 +70,11 @@
     </h1>
 
     <p class="rb-cover__lede">
+      {% if is_brief %}
+      The branch's security position for the {{ date_from }} &mdash; {{ date_to }}
+      reporting period, written for branch management: what happened, what
+      needs attention, and what is being asked of you.
+      {% else %}
       Detection coverage and operational follow-through across
       {% if summary and summary.total %}
         <strong>{{ summary.total }}</strong> detections recorded by Wazuh sensors
@@ -65,6 +84,7 @@
       during the {{ date_from }} &mdash; {{ date_to }} reporting window.
       NIST CSF 2.0 alignment: <strong>Detect</strong> (scope of this audit). Other
       CSF 2.0 functions are out-of-scope per the project thesis.
+      {% endif %}
     </p>
 
     <dl class="rb-cover__meta">
@@ -81,8 +101,13 @@
         <dd>{{ user.username }} · {{ user.role }}</dd>
       </div>
       <div>
+        {% if is_brief %}
+        <dt>Report form</dt>
+        <dd>Management</dd>
+        {% else %}
         <dt>Framework</dt>
         <dd>NIST CSF 2.0 · Detect</dd>
+        {% endif %}
       </div>
     </dl>
   </div>

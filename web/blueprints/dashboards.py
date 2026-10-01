@@ -113,6 +113,17 @@ def dashboard_manager():
     # it — the manager's only route to it was a filter narrow enough to pull it
     # back inside the window. It now pages like the IT table.
     filters = _alert_filters_from_request()
+    # The feed's poll baseline — the same dict /api/alerts/latest returns, so
+    # an unchanged table compares equal. Read BEFORE the rows: an alert that
+    # lands between the two queries then shows up as a change on the first
+    # poll instead of being missed by both.
+    #
+    # The id half used to be `alerts[0].id` in the template — fine while the
+    # page was always the newest 50 rows, wrong the moment the feed can page:
+    # on page 2 the first row is not the newest alert, so the 15s poll compared
+    # the table's MAX(id) against a mid-table id and would have toasted "new
+    # alert" forever.
+    watermark = db.get_alert_watermark()
     total = db.count_alerts(
         status=filters["status"] or None,
         severity=filters["severity"] or None,
@@ -157,15 +168,6 @@ def dashboard_manager():
     agents_total = len(agents)
     agents_online = sum(1 for ag in agents if (ag.get("status") or "").lower() == "active")
 
-    # The feed's poll baseline. It used to be `alerts[0].id` in the template —
-    # fine while the page was always the newest 50 rows, wrong the moment the
-    # feed can page: on page 2 the first row is not the newest alert, so the
-    # 15s poll compared the table's MAX(id) against a mid-table id, found them
-    # different every single time, and would have toasted "new alert" forever.
-    # Same value /api/alerts/latest returns, so an unchanged table compares
-    # equal.
-    latest_alert_id = db.get_latest_alert_id() or ""
-
     # `devices` and `user` are gone from this context: nothing in the template
     # read either (it uses current_user from the base layout).
     return render_template(
@@ -178,7 +180,7 @@ def dashboard_manager():
         filters=filters,
         pager=pager,
         focus_mode=_focus_mode(),
-        latest_alert_id=latest_alert_id,
+        watermark=watermark,
     )
 
 

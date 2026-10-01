@@ -2,6 +2,8 @@
 # The security report (HTML + PDF) and the alerts CSV export.
 
 import logging
+import re
+from collections import Counter
 from datetime import datetime, timedelta
 
 from flask import (
@@ -14,8 +16,10 @@ import _request_cache
 import config
 import db
 import rate_limit
+import validator
 from decorators import role_required
 from wazuh_api import get_agent_status
+from web.filters import humanize_seconds
 from web.responses import csv_safe, rate_limited_response, reject_csv_flood
 
 
@@ -36,6 +40,149 @@ def _report_detail_alerts(alerts: list[dict]) -> tuple[list[dict], int]:
 logger = logging.getLogger("insightshield.web.reports")
 
 bp = Blueprint("reports", __name__)
+
+
+# ── Management form ──────────────────────────────────────────────────────────
+# The second form of the Security Audit Report: same reporting period, same
+# stored records, written for branch management instead of the IT
+# Administrator. Nothing here generates text — it assembles the plain-language
+# explanations already stored and validated for the Manager dashboard.
+
+# Detection identifiers, technique references and network addresses. Together
+# with config.FORBIDDEN_WORDS this is the management form's exclusion list.
+_BRIEF_EXCLUDED = re.compile(
+    r"\b\d{1,3}(?:\.\d{1,3}){3}\b"      # network address
+    r"|\bT\d{4}(?:\.\d{3})?\b"          # technique reference
+    r"|\brule\s*#?\s*\d+",              # detection identifier
+    re.IGNORECASE,
+)
+_PLAIN_SECTION = re.compile(r"(WHAT HAPPENED|HOW SERIOUS|WHAT TO DO):\s*")
+
+
+def _brief_safe(text) -> str:
+    """`text` if it may appear in the management form, else "".
+
+    Stored explanations already passed the validator, but static fallbacks and
+    IT's free-text resolution notes did not, so every stored string is checked
+    on the way in and dropped rather than rewritten.
+    """
+    text = (text or "").strip()
+    if not text or validator.contains_forbidden_word(text) or _BRIEF_EXCLUDED.search(text):
+        return ""
+    return text
+
+
+def _plain_sections(plain_text) -> dict:
+    """Split a stored explanation into its three labelled sections."""
+    parts = _PLAIN_SECTION.split(plain_text or "")
+    # ['', 'WHAT HAPPENED', '...', 'HOW SERIOUS', '...', 'WHAT TO DO', '...']
+    return {parts[i]: _brief_safe(parts[i + 1]) for i in range(1, len(parts) - 1, 2)}
+
+
+def _mean_ack_seconds(alerts: list[dict]) -> float | None:
+    times = [a["response_time_s"] for a in alerts if a.get("response_time_s") is not None]
+    return sum(times) / len(times) if times else None
+
+
+def _report_form() -> str:
+    """Which form was asked for. Each role defaults to the one written for it."""
+    form = request.args.get("form")
+    if form in ("management", "technical"):
+        return form
+    return "technical" if current_user.is_it_admin else "management"
+
+
+def _agents_online(agents: list[dict]) -> int:
+    """Case-insensitive, like both dashboards. The template used to count with
+    selectattr('status', 'equalto', 'active'), which under-reported coverage
+    for any agent Wazuh reported as "Active"."""
+    return sum(1 for ag in agents if (ag.get("status") or "").lower() == "active")
+
+
+def _brief_context(date_from: str, date_to: str, agents: list[dict]) -> dict:
+    """Everything templates/_report_brief.html reads, as one `brief` dict."""
+    alerts = _request_cache.cached_alerts_by_range(date_from, date_to)
+
+    # The previous period of equal length — the only comparison the brief
+    # makes. date_from/date_to have already been through _clamp_report_range.
+    fmt = "%Y-%m-%d"
+    start, end = datetime.strptime(date_from, fmt), datetime.strptime(date_to, fmt)
+    days = (end - start).days + 1
+    prior_from = (start - timedelta(days=days)).strftime(fmt)
+    prior_to = (start - timedelta(days=1)).strftime(fmt)
+    prior = _request_cache.cached_alerts_by_range(prior_from, prior_to)
+
+    def is_actionable(a):
+        return (a.get("severity") or "").upper() in config.ACTIONABLE_SEVERITIES
+
+    actionable = [a for a in alerts if is_actionable(a)]
+    open_actionable = [a for a in actionable if not a.get("resolved")]
+    # CRITICAL before HIGH; the sort is stable, so newest-first survives within each.
+    open_actionable.sort(key=lambda a: (a.get("severity") or "").upper() != "CRITICAL")
+
+    def item(a):
+        s = _plain_sections(a.get("plain_text"))
+        return {
+            "device": a.get("device_name") or "A monitored computer",
+            "date": (a.get("timestamp") or "")[:10],
+            "what": s.get("WHAT HAPPENED"),
+            "affect": s.get("HOW SERIOUS"),
+            "todo": s.get("WHAT TO DO"),
+            "state": "being handled by IT" if a.get("acknowledged") else "waiting for IT",
+            "note": _brief_safe(a.get("resolve_note")),
+        }
+
+    score = db.get_posture_score(date_from, date_to)
+    prior_score = db.get_posture_score(prior_from, prior_to)
+    waiting = sum(1 for a in open_actionable if not a.get("acknowledged"))
+    # Same 80/50 thresholds as the dashboard's Branch Health tile — except that
+    # a serious alert nobody has picked up is "Action required" whatever the
+    # score says, so the status can never read Good above an unanswered item.
+    if waiting or score < 50:
+        status = "Action required"
+    elif score < 80:
+        status = "Needs attention"
+    else:
+        status = "Good"
+
+    # Most common activity, described by the stored explanation of its newest
+    # alert (alerts are newest-first) rather than by the detection's own name.
+    most_common = ""
+    types = Counter(a.get("attack_type") for a in alerts if a.get("attack_type"))
+    if types:
+        top_type = types.most_common(1)[0][0]
+        newest = next(a for a in alerts if a.get("attack_type") == top_type)
+        most_common = _plain_sections(newest.get("plain_text")).get("WHAT HAPPENED", "")
+
+    done = [a for a in alerts
+            if a.get("resolved") and a.get("resolved_by") != config.SYSTEM_ACTOR]
+    closed = sum(1 for a in alerts if a.get("resolved"))
+    mean_ack, prior_mean_ack = _mean_ack_seconds(alerts), _mean_ack_seconds(prior)
+    offline = [ag.get("name") or "unnamed" for ag in agents
+               if (ag.get("status") or "").lower() != "active"]
+
+    return {
+        "days": days,
+        "status": status,
+        "score": score,
+        "prior_score": prior_score,
+        "prior_total": len(prior),
+        "total": len(alerts),
+        "needed_action": len(actionable),
+        "routine": len(alerts) - len(actionable),
+        "most_common": most_common,
+        "attention": [item(a) for a in open_actionable[:3]],
+        "attention_total": len(open_actionable),
+        "mean_ack": humanize_seconds(mean_ack) if mean_ack is not None else "",
+        "prior_mean_ack": humanize_seconds(prior_mean_ack) if prior_mean_ack is not None else "",
+        "closed": closed,
+        "open": len(alerts) - closed,
+        "done": [item(a) for a in done[:5]],
+        "done_total": len(done),
+        "agents_total": len(agents),
+        "agents_online": len(agents) - len(offline),
+        "agents_offline": offline,
+    }
 
 
 def _clamp_report_range(date_from: str, date_to: str) -> tuple[str, str, bool]:
@@ -155,6 +302,7 @@ def report():
     # value="1"> in the Generate form (templates/report.html). Without
     # it, no DB queries fire and no AI chain runs.
     generated = request.args.get("generated") == "1"
+    report_form = _report_form()
 
     # Every /report hit is audit-logged for chain-of-custody, including
     # bare visits to the empty-state CTA. The `generated` flag is
@@ -166,13 +314,29 @@ def report():
         actor_role=current_user.role,
         target="report",
         ip=request.remote_addr,
-        details={"from": date_from, "to": date_to, "generated": generated},
+        details={"from": date_from, "to": date_to, "generated": generated,
+                 "form": report_form},
     )
 
     if not generated:
         return render_template(
             "report.html",
             generated=False,
+            report_form=report_form,
+            date_from=date_from,
+            date_to=date_to,
+            generated_at=datetime.now(tz=config.PHT).isoformat(),
+            user=current_user,
+        )
+
+    if report_form == "management":
+        # No executive-summary AI call: the management form is assembled from
+        # explanations already stored, so it costs no provider quota.
+        return render_template(
+            "report.html",
+            generated=True,
+            report_form=report_form,
+            brief=_brief_context(date_from, date_to, get_agent_status()),
             date_from=date_from,
             date_to=date_to,
             generated_at=datetime.now(tz=config.PHT).isoformat(),
@@ -211,6 +375,8 @@ def report():
     return render_template(
         "report.html",
         generated=True,
+        report_form=report_form,
+        agents_online=_agents_online(agents),
         alerts=alerts,
         detail_alerts=detail_alerts,
         detail_total=detail_total,
@@ -273,6 +439,7 @@ def report_pdf():
     date_from = request.args.get("from", week_ago)
     date_to = request.args.get("to", today)
     generated = request.args.get("generated") == "1"
+    report_form = _report_form()
 
     # Each request launches a Chromium process synchronously and holds a worker
     # thread for the whole render. The route is login_required-only, so a
@@ -299,12 +466,15 @@ def report_pdf():
     # cheaper to maintain than one 50-line abstraction.
     context = {
         "generated": generated,
+        "report_form": report_form,
         "date_from": date_from,
         "date_to": date_to,
         "generated_at": datetime.now(tz=config.PHT).isoformat(),
         "user": current_user,
     }
-    if generated:
+    if generated and report_form == "management":
+        context["brief"] = _brief_context(date_from, date_to, get_agent_status())
+    elif generated:
         context["alerts"] = _request_cache.cached_alerts_by_range(date_from, date_to)
         context["detail_alerts"], context["detail_total"] = _report_detail_alerts(context["alerts"])
         context["detail_cap"] = config.REPORT_DETAIL_CAP
@@ -314,6 +484,7 @@ def report_pdf():
         context["auth_metrics"] = db.get_auth_metrics(date_from, date_to)
         context["posture_score"] = db.get_posture_score(date_from, date_to)
         context["agents"] = get_agent_status()
+        context["agents_online"] = _agents_online(context["agents"])
         latest_alert_id = db.get_latest_alert_id_in_range(date_from, date_to)
         import executive_summary as exec_summary
         text, provider = exec_summary.generate(
@@ -391,7 +562,7 @@ def report_pdf():
             traceback=_tb.format_exc(),
         )
         flash("PDF generation failed — the browser engine may not be installed. Contact IT.", "error")
-        return redirect(url_for("reports.report", **{"from": date_from, "to": date_to}))
+        return redirect(url_for("reports.report", **{"from": date_from, "to": date_to, "form": report_form}))
 
     db.log_audit(
         action="REPORT_PDF_EXPORT",
@@ -399,10 +570,11 @@ def report_pdf():
         actor_role=current_user.role,
         target="report.pdf",
         ip=request.remote_addr,
-        details={"from": date_from, "to": date_to, "generated": generated},
+        details={"from": date_from, "to": date_to, "generated": generated,
+                 "form": report_form},
     )
 
-    filename = f"insightshield-audit-{date_from}_{date_to}.pdf"
+    filename = f"insightshield-audit-{report_form}-{date_from}_{date_to}.pdf"
     return Response(
         pdf_bytes,
         mimetype="application/pdf",

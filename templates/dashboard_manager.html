@@ -145,7 +145,12 @@
       {# The table's MAX(id), from the route — not this page's first row. With
          paging, the first row of page 2 is not the newest alert, and the poll
          compares this against /api/alerts/latest. #}
-      data-latest-id="{{ latest_alert_id }}"
+      data-latest-id="{{ watermark.latest_id }}"
+      {# The other two halves of the same watermark: the newest HIGH/CRITICAL
+         id (ui.js reloads page 1 for those) and the newest status change IT
+         made (so an acknowledgment or resolution reaches this open view). #}
+      data-latest-actionable-id="{{ watermark.latest_actionable_id }}"
+      data-status-ts="{{ watermark.status_ts }}"
       {# Both classes, like dashboard_it.html:67. --tall is a modifier: it sets
          the height budget, while overflow-y:auto lives on the base
          .table-scroll. With only the modifier the feed had a 452px box and

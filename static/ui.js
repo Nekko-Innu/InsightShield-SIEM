@@ -325,22 +325,30 @@
   // ---------- Manager dashboard polling ----------
   const feed = document.getElementById('alerts-feed');
   if (feed && feed.dataset.pollUrl) {
-    setInterval(async () => {
+    // Baseline is the watermark the server rendered the page from. The page is
+    // never patched in place: a reload re-runs the server's filtered query and
+    // brings the KPI tiles along, so this file never re-implements the filter.
+    const baseActionable = Number(feed.dataset.latestActionableId) || 0;
+    const baseStatus = feed.dataset.statusTs || '';
+    // Alerts are newest-first, so arrivals only ever land on page 1.
+    const onFirstPage = (new URLSearchParams(location.search).get('page') || '1') === '1';
+
+    // Reload without a click for a HIGH/CRITICAL arrival or a status change
+    // by IT, and say nothing about anything else. Routine alerts arrive every
+    // minute on a live branch, so a "new alert" notice was permanently on
+    // screen and told the manager nothing.
+    if (onFirstPage) setInterval(async () => {
       try {
         const r = await fetch(feed.dataset.pollUrl, { headers: { 'Accept': 'application/json' } });
         if (!r.ok) { pollFailure('manager-feed', false); return; }
         pollFailure('manager-feed', true);
-        const { latest_id } = await r.json();
-        if (latest_id && String(latest_id) !== feed.dataset.latestId) {
-          feed.dataset.latestId = String(latest_id);
-          // The toast used to say "refresh to view" and leave the manager to
-          // find the F5 key during the minutes an incident is unfolding. Now
-          // it is the button: click reloads, which re-runs the same query the
-          // page already runs and brings the KPI tiles along with the row.
-          // Reloading on a timer instead was rejected — during a burst it
-          // would repaint the page every 15s under whoever is reading it.
-          toastAction('New alert received', 'Reload', () => window.location.reload(), 'warning');
-        }
+        const w = await r.json();
+        if ((w.status_ts || '') === baseStatus &&
+            (Number(w.latest_actionable_id) || 0) <= baseActionable) return;
+        // Not while the manager is mid-way through the filter form — the
+        // reload would discard what they typed. Retried on the next tick.
+        const el = document.activeElement;
+        if (!(el && el.matches('input, select, textarea'))) window.location.reload();
       } catch { pollFailure('manager-feed', false); }
     }, 15000);
   }
